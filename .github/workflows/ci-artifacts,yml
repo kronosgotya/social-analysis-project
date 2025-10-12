@@ -1,0 +1,49 @@
+name: CI - Process & Artifacts
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - "src/**"
+      - "scripts/**"
+      - "requirements.txt"
+      - "README.txt"
+  workflow_dispatch:
+
+jobs:
+  process:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Prepare input data
+        run: |
+          mkdir -p data/raw
+        # Coloca aquí datos de prueba mínimos si quieres validar el pipeline.
+        # Por ejemplo:
+        # echo "timestamp,channel,messageId,uid,kind,summary,link,lang" > data/raw/telegram.csv
+        # echo "Tweet ID,URL,Content,Language,Likes,Retweets,Replies,Quotes,Views,Date,Is Reply,Conversation ID,Reply to userid,Author ID,Author Name,Author Profile URL,Hashtags,Hashtags counts,MentionedUsers,Quoted X ID,Quoted Tweet URL,Retweeted X ID,Retweeted X URL" > data/raw/x.csv
+
+      - name: Run processing
+        run: |
+          python scripts/process_all.py --telegram data/raw/telegram.csv --x data/raw/x.csv --device -1
+
+      - name: Upload processed CSVs and graph files as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: processed-${{ github.run_number }}
+          path: |
+            data/processed/*.csv
+            results/graphs/*
+          if-no-files-found: warn
+          retention-days: 30

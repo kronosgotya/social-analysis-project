@@ -1,0 +1,40 @@
+# Repositorio
+.git
+.gitignore
+
+# Python caches / venv
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.pytest_cache/
+.cache/
+
+# Sistemas / IDE
+.DS_Store
+.vscode/
+.idea/
+
+# Datos (no meter en la imagen)
+data/raw/
+data/processed/
+results/graphs/
+results/charts/
+
+# Archivos grandes comunes
+*.csv
+*.tsv
+*.parquet
+*.feather
+*.gexf
+*.png
+*.svg
+*.jpg
+*.jpeg
+
+# Cuadernos y checkpoints (si existieran)
+.ipynb_checkpoints/
+
+# Variables locales
+.env

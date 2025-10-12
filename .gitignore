@@ -1,0 +1,53 @@
+# === Python ===
+__pycache__/
+*.py[cod]
+*.so
+*.pyd
+*.pyo
+*.egg-info/
+.build/
+build/
+dist/
+.eggs/
+.pytest_cache/
+.cache/
+.venv/
+venv/
+env/
+
+# === Jupyter (por si usas cuadernos) ===
+.ipynb_checkpoints/
+
+# === Sistemas / IDE ===
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# === Datos (NO versionar CSVs de entrada ni salidas generadas) ===
+# Mantén las carpetas vacías con un .gitkeep
+data/raw/**
+!data/raw/.gitkeep
+
+data/processed/**
+!data/processed/.gitkeep
+
+results/graphs/**
+!results/graphs/.gitkeep
+
+results/charts/**
+!results/charts/.gitkeep
+
+# === Archivos grandes/temporales opcionales ===
+*.csv
+*.tsv
+*.parquet
+*.feather
+*.gexf
+*.png
+*.svg
+*.jpg
+*.jpeg
+
+# Si tienes algún .env local para pruebas
+.env
