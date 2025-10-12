@@ -22,7 +22,7 @@ Tested with Python 3.11 and ARM-friendly requirements.
 
 ---
 
-## 2) Repository Structure (corrected: single `results/` at root)
+## 2) Repository Structure
 ```text
 social-analytics-project/
 ├── data/
