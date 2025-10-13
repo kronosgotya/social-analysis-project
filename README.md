@@ -95,7 +95,7 @@ python scripts/process_all.py --telegram data/raw/telegram.csv --x data/raw/x.cs
 - `--x`: path to X CSV (optional)
 - `--max_rows`: limits rows for testing (`0` = all)
 - `--device`: `-1` for CPU, `0` for first GPU, etc.
-- `--emotion_model`: name of zero‑shot model for emotions (advanced)
+- `--emotion_model`: name of zero‑shot model for emotions
 
 **Expected console output:**
 ```
@@ -191,7 +191,7 @@ python scripts/process_all.py --telegram data/raw/telegram.csv --x data/raw/x.cs
 4. Include `retweet` and `quote` edges if available.  
 5. Weighted metrics so `degree/pagerank` reflect interaction strength.
 
-> These enhancements are available in an alternative version of `preprocessing.py` and `network.py` ready to integrate.
+> These enhancements will be available in an alternative version of `preprocessing.py` and `network.py` and have to be integrated.
 
 ---
 
