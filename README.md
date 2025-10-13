@@ -49,7 +49,7 @@ social-analytics-project/
 ├── scripts/
 │   └── process_all.py
 ├── requirements.txt
-└── README.txt  (this document)
+└── README.md
 ```
 
 ---
