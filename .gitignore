@@ -26,12 +26,15 @@ Thumbs.db
 
 # === Datos (NO versionar CSVs de entrada ni salidas generadas) ===
 # Mantén las carpetas vacías con un .gitkeep
+
+!data/.gitkeep
 data/raw/**
 !data/raw/.gitkeep
 
 data/processed/**
 !data/processed/.gitkeep
 
+!results/.gitkeep
 results/graphs/**
 !results/graphs/.gitkeep
 
