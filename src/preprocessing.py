@@ -145,32 +145,93 @@ def _first_col(df: pd.DataFrame, names: List[str]) -> Optional[str]:
 # Telegram
 # =========================
 def load_telegram(path: str) -> pd.DataFrame:
-    df = _read_csv_utf8(path)
-    required = ["timestamp", "channel", "messageId", "uid", "kind", "summary", "link", "lang"]
-    missing = [c for c in required if c not in df.columns]
+    """
+    Lee el CSV de Telegram y homologa los campos analíticos con los de X.
+    - Detecta alias comunes (timestamp, texto, métricas) para tolerar cambios de esquema.
+    - Normaliza fecha a YYYY-MM-DD y añade columnas vacías si faltan.
+    """
+    df = _read_csv_utf8(path).copy()
+
+    timestamp_aliases = ["timestamp", "date", "datetime", "created_at", "dt"]
+    channel_aliases = ["channel", "channel_name", "chat", "chat_name", "author", "from"]
+    message_aliases = ["messageId", "message_id", "id", "msg_id"]
+    uid_aliases = ["uid", "message_uid", "item_uid", "permalink_uid"]
+    kind_aliases = ["kind", "media_kind", "type"]
+    text_aliases = ["summary", "text", "message", "content", "body"]
+    link_aliases = ["link", "permalink", "url", "message_link"]
+    lang_aliases = ["lang", "language", "locale"]
+
+    c_timestamp = _first_col(df, timestamp_aliases)
+    c_channel = _first_col(df, channel_aliases)
+    c_message = _first_col(df, message_aliases)
+    c_uid = _first_col(df, uid_aliases)
+    c_kind = _first_col(df, kind_aliases)
+    c_text = _first_col(df, text_aliases)
+    c_link = _first_col(df, link_aliases)
+    c_lang = _first_col(df, lang_aliases)
+
+    missing = [("timestamp", c_timestamp), ("channel", c_channel), ("messageId", c_message), ("text", c_text)]
+    missing = [field for field, col in missing if col is None]
     if missing:
         raise ValueError(f"Telegram CSV missing required columns: {missing}")
 
-    df = df.copy()
-    df = df.rename(columns={"summary": "text", "channel": "author"})
-    df["source"] = "Telegram"
-    df["text_clean"] = df["text"].apply(normalize_whitespace)
-    df["emojis"] = df["text"].apply(extract_emojis)
-    df["emoji_count"] = df["emojis"].apply(len)
+    # Normalización básica de strings
+    def _as_str(col_name: str) -> pd.Series:
+        if col_name and (col_name in df.columns):
+            return df[col_name].astype(str)
+        return pd.Series([""] * len(df), index=df.index, dtype="object")
 
-    # FECHA normalizada (YYYY-MM-DD)
-    df["timestamp"] = _normalize_date_series(df["timestamp"])
+    out = pd.DataFrame(index=df.index)
+    out["source"] = "Telegram"
+    out["messageId"] = _as_str(c_message)
+    out["author"] = _as_str(c_channel)
+    out["kind"] = _as_str(c_kind)
+    out["lang"] = _as_str(c_lang)
+    out["text"] = _as_str(c_text)
+    out["link"] = _as_str(c_link)
 
-    # Tipos string
-    for c in ("timestamp", "lang", "messageId", "uid", "kind", "author", "link"):
-        if c in df.columns:
-            df[c] = df[c].astype(str)
+    if c_uid:
+        out["uid"] = _as_str(c_uid)
+    else:
+        out["uid"] = (out["author"].str.strip() + ":" + out["messageId"].str.strip()).str.strip(":")
 
-    out_cols = [
+    # Texto limpio + emojis
+    out["text_clean"] = out["text"].apply(normalize_whitespace)
+    out["emojis"] = out["text"].apply(extract_emojis)
+    out["emoji_count"] = out["emojis"].apply(len)
+
+    # Fecha normalizada (sólo día)
+    out["timestamp"] = _normalize_date_series(_as_str(c_timestamp))
+
+    # Métricas: mapeamos a las mismas columnas que X
+    def _metric(name_list: List[str]) -> pd.Series:
+        col = _first_col(df, name_list)
+        if col and col in df.columns:
+            return pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
+        return pd.Series([0] * len(df), index=df.index)
+
+    out["likes"] = _metric(["likes", "reactions", "reaction_count", "reactions_count"])
+    out["retweets"] = _metric(["forwards", "forward_count", "shares", "shares_count"])
+    out["replies"] = _metric(["replies", "reply_count", "comments", "comments_count"])
+    out["quotes"] = _metric(["quotes", "quote_count"])
+    out["views"] = _metric(["views", "view_count", "views_count"])
+
+    # Para trazabilidad adicional guardamos métricas originales si existen
+    for original, alias_list in {
+        "telegram_forwards": ["forwards", "forward_count", "shares", "shares_count"],
+        "telegram_reactions": ["reactions", "reaction_count", "reactions_count"],
+    }.items():
+        col = _first_col(df, alias_list)
+        if col and col in df.columns and original not in out.columns:
+            out[original] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
+
+    base_cols = [
         "source","timestamp","author","messageId","uid","kind",
         "text","text_clean","link","lang","emojis","emoji_count",
+        "likes","retweets","replies","quotes","views",
     ]
-    return df[out_cols]
+    extras = [c for c in out.columns if c not in base_cols]
+    return out[base_cols + extras]
 
 # =========================
 # X / Twitter
@@ -288,5 +349,11 @@ def unify_frames(df_tg: pd.DataFrame | None, df_x: pd.DataFrame | None) -> pd.Da
     for col in base_cols:
         if col not in df.columns:
             df[col] = None
+
+    metric_cols = ["likes","retweets","replies","quotes","views"]
+    for col in metric_cols:
+        if col not in df.columns:
+            df[col] = 0
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
 
     return df[base_cols + [c for c in df.columns if c not in base_cols]]
