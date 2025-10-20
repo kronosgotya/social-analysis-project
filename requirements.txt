@@ -15,3 +15,5 @@ bertopic
 sentence-transformers
 hdbscan
 umap-learn
+stopwordsiso>=0.6
+simplemma>=0.9
