@@ -53,7 +53,7 @@ results/charts/**
 *.svg
 *.jpg
 *.jpeg
-model.pkl
+bertopic_model.pkl
 
 # Si tienes algún .env local para pruebas
 .env
