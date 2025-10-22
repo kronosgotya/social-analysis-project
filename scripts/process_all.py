@@ -5,7 +5,7 @@ from pathlib import Path
 from datetime import datetime, date
 import sys
 import re
-from typing import Dict, Optional
+from typing import Dict, Optional, List, Set
 
 # --- Fix ruta para importar src/*
 ROOT = Path(__file__).resolve().parents[1]
@@ -123,7 +123,7 @@ def _derive_facts_posts_tableau(
     encoding: str = "utf-8-sig",
 ) -> None:
     if not input_path.exists():
-        print(f"ⓘ Could not find {input_path.name}; – skipping Tableau derivative.")
+        print(f"ⓘ Could not find {input_path.name}; skipping Tableau derivative.")
         return
 
     df = pd.read_csv(input_path, sep=sep, encoding=encoding, dtype=str)
@@ -132,17 +132,13 @@ def _derive_facts_posts_tableau(
     if total_rows == 0:
         output_path = input_path.parent / output_filename
         export_tableau_csv(df, str(output_path))
-        print(f"ⓘ {output_filename} generado (dataset vacío).")
+        print(f"ⓘ {output_filename} generated (empty dataset).")
         return
 
     timestamp_series = df.get("timestamp", pd.Series(["" for _ in range(total_rows)]))
     text_series = df.get("text_clean", pd.Series(["" for _ in range(total_rows)]))
-    label_series = df.get("sentiment_label", pd.Series(["" for _ in range(total_rows)]))
-    score_series = pd.to_numeric(df.get("sentiment_score", pd.Series([0.0 for _ in range(total_rows)])), errors="coerce")
-
     invalid_timestamp = 0
     text_null_count = int(text_series.isna().sum())
-    sentiment_score_null = int(score_series.isna().sum())
 
     def _extract_date(value) -> str:
         nonlocal invalid_timestamp
@@ -158,8 +154,12 @@ def _derive_facts_posts_tableau(
         match = re.search(r"\d{4}-\d{2}-\d{2}", text)
         if match:
             return match.group(0)
-        invalid_timestamp += 1
-        return ""
+        try:
+            parsed = pd.to_datetime(text, errors="raise")
+            return parsed.date().isoformat()
+        except Exception:
+            invalid_timestamp += 1
+            return ""
 
     def _truncate_text(value) -> str:
         if pd.isna(value):
@@ -167,41 +167,76 @@ def _derive_facts_posts_tableau(
         text = str(value).replace("\r", " ").replace("\n", " ").replace("\t", " ")
         return text.strip()[:trunc_len]
 
-    def _polarity(label, score) -> float:
-        if pd.isna(score):
-            score_val = 0.0
-        else:
+    def _entity_polarities(value: object):
+        if value in (None, "", "[]"):
+            return []
+        try:
+            mentions = json.loads(value) if isinstance(value, str) else value
+        except Exception:
+            return []
+        if not isinstance(mentions, list):
+            return []
+        sums: Dict[str, float] = {}
+        counts: Dict[str, int] = {}
+        labels: Dict[str, Dict[str, int]] = {}
+        for mention in mentions:
+            if not isinstance(mention, dict):
+                continue
+            entity = str(mention.get("entity") or "").strip()
+            if not entity:
+                continue
             try:
-                score_val = float(score)
+                score_val = float(mention.get("sentiment_score", 0.0) or 0.0)
             except (TypeError, ValueError):
                 score_val = 0.0
-        score_val = min(max(score_val, 0.0), 1.0)
-        label_norm = str(label).strip().lower()
-        if label_norm in {"positive", "pos"}:
-            sign = 1.0
-        elif label_norm in {"negative", "neg"}:
-            sign = -1.0
-        else:
-            sign = 0.0
-        return round(sign * score_val, 6)
+            label = str(mention.get("sentiment_label") or "").strip().lower()
+            if label in {"positive", "pos"}:
+                polarity = score_val
+            elif label in {"negative", "neg"}:
+                polarity = -score_val
+            else:
+                polarity = 0.0
+            sums[entity] = sums.get(entity, 0.0) + polarity
+            counts[entity] = counts.get(entity, 0) + 1
+            labels.setdefault(entity, {})[label] = labels.setdefault(entity, {}).get(label, 0) + 1
+
+        results = []
+        for entity, total in sums.items():
+            count = counts.get(entity, 1)
+            avg = total / count if count else 0.0
+            entity_labels = labels.get(entity, {})
+            dominant_label = "neutral"
+            if entity_labels:
+                dominant_label = max(entity_labels.items(), key=lambda kv: kv[1])[0] or "neutral"
+            results.append({
+                "entity": entity,
+                "avg_polarity": round(avg, 6),
+                "mentions": count,
+                "dominant_label": dominant_label,
+            })
+        return results
 
     df["date"] = timestamp_series.apply(_extract_date)
     df["text_trunc"] = text_series.apply(_truncate_text)
-    df["sentiment_polarity"] = [
-        _polarity(label, score)
-        for label, score in zip(label_series, score_series.fillna(0.0))
-    ]
+    if "entity_mentions" in df.columns:
+        df["entity_sentiment_polarity"] = df["entity_mentions"].apply(_entity_polarities).apply(
+            lambda rows: json.dumps(rows, ensure_ascii=False)
+        )
+    else:
+        df["entity_sentiment_polarity"] = [json.dumps([], ensure_ascii=False)] * total_rows
+
+    if "sentiment_polarity" in df.columns:
+        df = df.drop(columns=["sentiment_polarity"])
 
     output_path = input_path.parent / output_filename
     export_tableau_csv(df, str(output_path))
 
     print(
-        "✔ {file} generado → {rows} filas | timestamp inválido: {bad_ts} | text_clean nulo: {null_text} | sentiment_score nulo: {null_score}".format(
+        "✔ {file} generated → {rows} rows | invalid timestamp: {bad_ts} | empty text_clean: {null_text}".format(
             file=output_filename,
             rows=total_rows,
             bad_ts=invalid_timestamp,
             null_text=text_null_count,
-            null_score=sentiment_score_null,
         )
     )
 
@@ -538,6 +573,16 @@ def main():
         else:
             df_all["emotion_scores"] = [{} for _ in range(len(df_all))]
 
+        if "related_entities" in df_all.columns:
+            df_all["related_entities"] = df_all["related_entities"].apply(
+                lambda v: v if isinstance(v, str) else json.dumps(v or [], ensure_ascii=False)
+            )
+        else:
+            df_all["related_entities"] = [json.dumps([], ensure_ascii=False) for _ in range(len(df_all))]
+
+        if "entity_sentiment_polarity" not in df_all.columns:
+            df_all["entity_sentiment_polarity"] = [json.dumps([], ensure_ascii=False) for _ in range(len(df_all))]
+
         if "topic_terms" in df_all.columns:
             df_all["topic_terms"] = df_all["topic_terms"].apply(
                 lambda v: list(v) if isinstance(v, (list, tuple))
@@ -554,7 +599,7 @@ def main():
             "sentiment_label","sentiment_score","stance","stance_value",
             "impact_score","impact_score_mean","n_entity_mentions","entities_detected",
             "emotion_label","emotion_scores","emoji_count","text_clean","text_topic","topic_terms","link","likes","retweets","replies","quotes","views",
-            "topic_id","topic_label","topic_score","manual_label_topic","manual_label_subtopic","entity_mentions"
+            "topic_id","topic_label","topic_score","manual_label_topic","manual_label_subtopic","related_entities","entity_sentiment_polarity","entity_mentions"
         ]
         facts_cols = [c for c in facts_cols if c in df_all.columns]
         facts = df_all[facts_cols].copy()

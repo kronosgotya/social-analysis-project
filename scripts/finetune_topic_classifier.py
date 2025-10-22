@@ -15,7 +15,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import classification_report
 from sklearn.model_selection import train_test_split
 
-GROUND_TRUTH_PATH = Path("data") / "ground_truth" / "topics_manual_finetune.csv"
+GROUND_TRUTH_PATH = Path("data") / "ground_truth" / "topics_manual_labels.csv"
 MODEL_PATH = Path("models") / "topic_classifier" / "topic_classifier.joblib"
 MIN_TOPICS = 201
 
@@ -33,12 +33,12 @@ def _terms_to_text(value: str) -> str:
 def load_dataset() -> pd.DataFrame:
     if not GROUND_TRUTH_PATH.exists():
         raise FileNotFoundError(
-            "topics_manual_finetune.csv not found. Run update_topics_manual_labels.py first."
+            "topics_manual_labels.csv not found. Run update_topics_manual_labels.py first."
         )
     df = pd.read_csv(GROUND_TRUTH_PATH, sep=";", encoding="utf-8-sig")
     for col in ["manual_label_topic", "manual_label_subtopic"]:
         if col not in df.columns:
-            raise KeyError(f"Column '{col}' is missing from topics_manual_finetune.csv")
+            raise KeyError(f"Column '{col}' is missing from topics_manual_labels.csv")
         df[col] = df[col].astype(str).str.strip()
     df = df[(df["manual_label_topic"] != "") & (df["manual_label_subtopic"] != "")].copy()
     df["topic_terms"] = df["topic_terms"].astype(str).str.strip().apply(_terms_to_text)

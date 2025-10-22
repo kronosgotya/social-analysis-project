@@ -26,6 +26,58 @@ DEFAULT_ENTITY_DIR = Path(__file__).resolve().parent.parent / "data" / "entities
 DEFAULT_PRINCIPAL_CONFIG_PATH = DEFAULT_ENTITY_DIR / "principal_entities.json"
 DEFAULT_RELATED_CONFIG_PATH = DEFAULT_ENTITY_DIR / "related_entities.json"
 
+NATO_COUNTRIES = {
+    "united states",
+    "usa",
+    "us",
+    "united kingdom",
+    "uk",
+    "canada",
+    "france",
+    "germany",
+    "italy",
+    "spain",
+    "poland",
+    "romania",
+    "lithuania",
+    "latvia",
+    "estonia",
+    "norway",
+    "sweden",
+    "finland",
+    "denmark",
+    "netherlands",
+    "belgium",
+    "czech republic",
+    "slovakia",
+    "hungary",
+    "croatia",
+    "montenegro",
+    "north macedonia",
+    "slovenia",
+    "bulgaria",
+    "turkey",
+    "greece",
+    "portugal",
+    "albania",
+    "iceland",
+    "luxembourg",
+    "ukraine",
+}
+
+RUSSIA_COUNTRIES = {
+    "russia",
+    "russian federation",
+    "belarus",
+    "crimea",
+    "donetsk",
+    "luhansk",
+    "lugansk",
+    "dagestan",
+    "chechnya",
+    "syria",
+}
+
 _FALLBACK_PRINCIPAL_CONFIG: Dict[str, Dict[str, Any]] = {
     "NATO": {
         "weight": 8.0,
@@ -90,6 +142,7 @@ class AliasMatcher:
     priority: float
     pattern: re.Pattern
     metadata: Dict[str, Any]
+    linked_principal: Optional[str]
 
 
 @dataclass
@@ -183,6 +236,38 @@ def _compile_alias_pattern(alias: str, metadata: Optional[Dict[str, Any]]) -> re
     else:
         pattern_text = re.escape(alias)
     return re.compile(pattern_text, flags)
+
+
+def _infer_linked_principal(definition: EntityDefinition) -> Optional[str]:
+    if definition.entity_type == "principal" and definition.norm in PRIMARY_ENTITIES:
+        return definition.norm
+
+    meta = dict(definition.metadata or {})
+    direct = meta.get("linked_principal")
+    if isinstance(direct, str):
+        direct_clean = direct.strip()
+        if direct_clean in PRIMARY_ENTITIES:
+            return direct_clean
+
+    category = str(meta.get("category", "")).lower()
+    if "nato" in category or "ally" in category or "partner" in category:
+        return "NATO"
+    if "russia" in category or "kremlin" in category:
+        return "Russia"
+
+    country = str(meta.get("country", "")).lower()
+    if country in NATO_COUNTRIES:
+        return "NATO"
+    if country in RUSSIA_COUNTRIES:
+        return "Russia"
+
+    alliance = str(meta.get("alliance", "")).lower()
+    if "nato" in alliance:
+        return "NATO"
+    if "russia" in alliance:
+        return "Russia"
+
+    return None
 
 
 def _merge_definition(definition: EntityDefinition, spec: EntitySpec) -> None:
@@ -325,13 +410,19 @@ def build_entity_dictionary(
 
     for definition in definitions.values():
         if definition.entity_type == "principal" and definition.norm not in PRIMARY_ENTITIES:
-            allowed = ", ".join(sorted(PRIMARY_ENTITIES))
-            raise ValueError(
-                f"Principal entity must normalize to one of {{{allowed}}}, got '{definition.norm}'."
-            )
+            if logger:
+                logger.warning(
+                    "Entity '%s' marked as principal but not in PRIMARY_ENTITIES; demoting to related.",
+                    definition.norm,
+                )
+            definition.entity_type = "related"
 
         entity_type = definition.entity_type or "related"
         base_weight = _default_entity_weight(entity_type, definition.weight)
+
+        linked_principal = _infer_linked_principal(definition)
+        if entity_type == "principal":
+            linked_principal = definition.norm
 
         if definition.norm not in definition.aliases:
             definition.aliases[definition.norm] = base_weight
@@ -345,6 +436,7 @@ def build_entity_dictionary(
             "aliases": alias_names,
             "metadata": dict(definition.metadata),
             "base_weight": base_weight,
+            "linked_principal": linked_principal,
         }
 
         for alias, weight in definition.aliases.items():
@@ -361,6 +453,7 @@ def build_entity_dictionary(
                 priority=priority,
                 pattern=pattern,
                 metadata=dict(alias_meta),
+                linked_principal=linked_principal,
             )
 
             alias_key = alias.casefold()
@@ -496,6 +589,7 @@ class MentionCandidate:
     detector: str = "alias"
     text_source: Optional[str] = None
     ner_group: Optional[str] = None
+    linked_principal: Optional[str] = None
 
 def _snippet(text: str, needle: str, window: int = 160) -> str:
     """
@@ -749,6 +843,7 @@ def extract_entity_mentions(
                             matched_alias=matcher.alias,
                             detector="alias",
                             text_source=source_tag,
+                            linked_principal=matcher.linked_principal,
                         )
                     )
 
@@ -784,6 +879,7 @@ def extract_entity_mentions(
                     alias_value = matched_text
                     alias_weight_val = score_val
 
+                    linked_principal_val: Optional[str] = None
                     alias_matcher = entity_dict.alias_lookup.get(matched_text.casefold())
                     if alias_matcher:
                         entity_norm_val = alias_matcher.entity_norm
@@ -791,10 +887,14 @@ def extract_entity_mentions(
                         entity_label_val = alias_matcher.entity_label
                         alias_value = alias_matcher.alias
                         alias_weight_val = alias_matcher.weight
+                        linked_principal_val = alias_matcher.linked_principal
                     elif not ner_allow_unmatched:
                         continue
                     else:
                         entity_norm_val = matched_text
+                        linked_principal_val = entity_dict.entity_meta.get(
+                            entity_norm_val, {}
+                        ).get("linked_principal")
 
                     entity_key = entity_norm_val or matched_text
                     entity_spans = spans_by_entity.setdefault(entity_key, [])
@@ -830,13 +930,14 @@ def extract_entity_mentions(
                             entity_label=entity_label_val,
                             alias_weight=alias_weight_val,
                             matched_text=matched_text,
-                            confidence=alias_weight_val * normalized_weight,
+                            confidence=score_val,
                             span_start=span_start,
                             span_end=span_end,
                             matched_alias=alias_value,
                             detector="ner",
                             ner_group=group_label,
                             text_source=source_tag,
+                            linked_principal=linked_principal_val,
                         )
                     )
     return mentions
@@ -874,6 +975,7 @@ def mentions_to_dataframe(mentions: Sequence[MentionCandidate]) -> pd.DataFrame:
         "full_text",
         "snippet",
         "text_source",
+        "linked_principal",
     ]
 
     if not mentions:
@@ -1014,6 +1116,7 @@ def compute_entity_summary(
         "freq",
         "sentiment_mean",
         "sentiment_mean_weighted",
+        "related_entities",
         "top_emotion_weighted",
         "period_start",
         "period_end",
@@ -1095,6 +1198,23 @@ def compute_entity_summary(
         "sentiment_mean_weighted": sentiment_weighted.values,
     })
 
+    related_lists: Dict[str, List[str]] = {}
+    if "linked_principal" in work.columns and "entity_norm" in work.columns:
+        related_mentions = work[work["entity_type"] == "related"].copy()
+        if not related_mentions.empty:
+            related_mentions["linked_principal"] = related_mentions["linked_principal"].astype(str).str.strip()
+            filtered = related_mentions[related_mentions["linked_principal"].isin(PRIMARY_ENTITIES)]
+            if not filtered.empty:
+                grouped_related = filtered.groupby("linked_principal")["entity_norm"].agg(
+                    lambda s: sorted({val for val in s if isinstance(val, str) and val.strip()})
+                )
+                for principal, names in grouped_related.items():
+                    related_lists[principal] = [f"{name} - {principal}" for name in names]
+
+    summary["related_entities"] = summary["entity_norm"].map(
+        lambda key: json.dumps(related_lists.get(key, []), ensure_ascii=False)
+    )
+
     emotion_cols = [col for col in joined.columns if col.startswith("emotion_prob_")]
     for col in emotion_cols:
         emotion_key = col.replace("emotion_prob_", "").lower()
@@ -1133,6 +1253,7 @@ def compute_entity_summary(
         "freq",
         "sentiment_mean",
         "sentiment_mean_weighted",
+        "related_entities",
     ]
     emotion_mean_cols = sorted([col for col in summary.columns if col.startswith("mean_emotion_")])
     emotion_wmean_cols = sorted([col for col in summary.columns if col.startswith("wmean_emotion_")])
@@ -1548,6 +1669,7 @@ def aggregate_mentions_per_item(mentions_df: pd.DataFrame) -> pd.DataFrame:
                 "impact_score_mean",
                 "engagement_mean",
                 "reach_mean",
+                "related_entities",
             ]
         )
 
@@ -1568,6 +1690,30 @@ def aggregate_mentions_per_item(mentions_df: pd.DataFrame) -> pd.DataFrame:
 
     aggregated["entities_detected"] = group["entity"].apply(
         lambda s: sorted({val for val in s.dropna() if isinstance(val, str) and val.strip()})
+    )
+
+    def _collect_related(sub_df: pd.DataFrame) -> List[str]:
+        principal_present = {
+            str(val).strip()
+            for val, etype in zip(sub_df["entity_norm"], sub_df["entity_type"])
+            if isinstance(val, str) and val.strip() and str(etype).lower() == "principal"
+        }
+        related_pairs: Set[str] = set()
+        for _, row in sub_df.iterrows():
+            if str(row.get("entity_type", "")).lower() != "related":
+                continue
+            linked = str(row.get("linked_principal") or "").strip()
+            if not linked or linked not in principal_present:
+                continue
+            related_name = str(row.get("entity_norm") or "").strip()
+            if not related_name:
+                continue
+            related_pairs.add(f"{related_name} - {linked}")
+        return sorted(related_pairs)
+
+    related_series = group.apply(_collect_related)
+    aggregated["related_entities"] = related_series.reindex(aggregated.index).apply(
+        lambda values: json.dumps(values, ensure_ascii=False)
     )
 
     def _weighted_stance(sub_df: pd.DataFrame) -> float:

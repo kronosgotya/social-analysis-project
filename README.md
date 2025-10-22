@@ -92,8 +92,8 @@ Directories are created on demand through `utils.ensure_dirs`.
 ## Core Outputs (`data/processed/`)
 - `telegram_preprocessed.csv`, `x_preprocessed.csv`: platform snapshots with normalized metrics ready for downstream ingestion.
 - `all_platforms.csv`: combined dataset containing topic assignment, aggregated entity metrics, impact_score, cleaned topic text (`text_topic`), and per-row entity mention payloads (JSON).
-- `facts_posts.csv`: Tableau-ready fact table including engagement, stance, impact_score per post, topic terms (`topic_terms`), expanded emotion probabilities (`emotion_prob_*`), and the harmonised `manual_label_topic` / `manual_label_subtopic` columns consumed by Tableau dashboards.
-- `facts_posts_tableau.csv`: compact derivative with helper columns (`date`, `text_trunc`, `sentiment_polarity`) that leaves the original untouched.
+- `facts_posts.csv`: Tableau-ready fact table including engagement, stance, impact_score per post, topic terms (`topic_terms`), expanded emotion probabilities (`emotion_prob_*`), principal topic labels (`manual_label_topic` / `manual_label_subtopic`), and `related_entities` lists such as `"Prime Minister - Russia"`.
+- `facts_posts_tableau.csv`: compact derivative with helper columns (`date`, `text_trunc`, `entity_sentiment_polarity` as JSON per entity) that leaves the original untouched.
 - `emotions_long.csv`: tidy emotion probabilities (`item_id`, `emotion`, `prob`).
 - `topics_assignments.csv`, `topics_summary_daily.csv`: BERTopic assignments and daily evolution, enriched with `manual_label_topic` and `manual_label_subtopic` (either curated or model-predicted).
 - `entity_mentions.csv`, `entity_topic_summary.csv`: entity-conditioned sentiment, stance, impact_score, and emotion aggregations.
@@ -118,11 +118,11 @@ Directories are created on demand through `utils.ensure_dirs`.
 
 1. **Grow the ground truth**
    - `python data/ground_truth/update_entity_sentiment_labels.py --sample-size 25 --seed 123` samples new mentions (skipping duplicates) and updates `data/ground_truth/entity_sentiment_labels.csv`. It will also attempt to create `entity_sentiment_finetune.csv` once >2000 rows have a filled `sentiment_manual` value.
-   - `python data/ground_truth/update_topics_manual_labels.py --sort` keeps the manual topics table aligned with the detected topics. When >200 topics have `manual_label`, it emits `topics_manual_finetune.csv`.
+   - `python data/ground_truth/update_topics_manual_labels.py --sort` keeps the manual topics table aligned with the detected topics. When >200 topics have both `manual_label_topic` and `manual_label_subtopic`, it emits `topics_manual_finetune.csv`.
 
 2. **Train custom models (optional once fine-tuning datasets exist):**
    - `python scripts/finetune_sentiment.py` fine-tunes the base sentiment model and stores the checkpoint under `models/sentiment_finetuned/`; `SentimentScorer` picks it up automatically.
-   - `python scripts/finetune_topic_classifier.py` trains a lightweight classifier (TF-IDF + Logistic Regression) and writes `models/topic_classifier/topic_classifier.joblib`, which `process_all.py` uses to compute `topic_label_model` and override the automatic labels.
+   - `python scripts/finetune_topic_classifier.py` trains lightweight classifiers (TF-IDF + Logistic Regression) for topic and subtopic labels and writes `models/topic_classifier/topic_classifier.joblib`, which `process_all.py` uses to backfill `manual_label_topic` / `manual_label_subtopic` when the manual columns are empty.
 
 3. **Re-run the pipeline**
    - Execute `python scripts/process_all.py ...` again so the updated models are applied and the Tableau-ready CSVs are regenerated.

@@ -334,7 +334,8 @@ def load_telegram(path: str) -> pd.DataFrame:
     message_aliases = ["messageId", "message_id", "id", "msg_id"]
     uid_aliases = ["uid", "message_uid", "item_uid", "permalink_uid"]
     kind_aliases = ["kind", "media_kind", "type"]
-    caption_aliases = ["text", "message", "content", "body"]
+    text_aliases = ["text", "message", "content", "body"]
+    caption_aliases = ["caption", "media_caption", "message_caption", "text_caption"]
     summary_aliases = ["summary", "gemini_summary", "ai_summary"]
     link_aliases = ["link", "permalink", "url", "message_link"]
     lang_aliases = ["lang", "language", "locale"]
@@ -353,14 +354,15 @@ def load_telegram(path: str) -> pd.DataFrame:
     c_message = _first_col(df, message_aliases)
     c_uid = _first_col(df, uid_aliases)
     c_kind = _first_col(df, kind_aliases)
+    c_text = _first_col(df, text_aliases)
     c_caption = _first_col(df, caption_aliases)
     c_summary = _first_col(df, summary_aliases)
-    c_text = c_caption or c_summary
     c_link = _first_col(df, link_aliases)
     c_lang = _first_col(df, lang_aliases)
     c_geo = _first_col(df, geo_aliases)
 
-    missing = [("timestamp", c_timestamp), ("channel", c_channel), ("messageId", c_message), ("text", c_text)]
+    text_source_col = c_text or c_caption or c_summary
+    missing = [("timestamp", c_timestamp), ("channel", c_channel), ("messageId", c_message), ("text", text_source_col)]
     missing = [field for field, col in missing if col is None]
     if missing:
         raise ValueError(f"Telegram CSV missing required columns: {missing}")
@@ -378,16 +380,22 @@ def load_telegram(path: str) -> pd.DataFrame:
     out["author"] = _as_str(c_channel)
     out["kind"] = _as_str(c_kind)
     out["lang"] = _as_str(c_lang)
+    base_series = _as_str(text_source_col)
     caption_series = _as_str(c_caption)
     summary_series = _as_str(c_summary)
 
+    combined: List[str] = []
+    for base, caption, summary in zip(base_series, caption_series, summary_series):
+        pieces = []
+        for value in (base, caption, summary):
+            cleaned = str(value or "").strip()
+            if cleaned and cleaned not in pieces:
+                pieces.append(cleaned)
+        combined.append("\n".join(pieces))
+
+    out["text"] = pd.Series(combined, index=out.index)
     out["text_caption"] = caption_series
     out["text_summary"] = summary_series
-
-    out["text"] = caption_series
-    if c_summary:
-        mask_empty_caption = out["text"].str.strip() == ""
-        out.loc[mask_empty_caption, "text"] = summary_series.loc[mask_empty_caption]
     out["link"] = _as_str(c_link)
     out["geolocation"] = _as_str(c_geo)
     out["geolocation"] = out["geolocation"].astype(str).str.strip()
