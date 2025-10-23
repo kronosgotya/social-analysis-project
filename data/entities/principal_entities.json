@@ -1,0 +1,354 @@
+[
+  {
+    "name": "NATO",
+    "entity_norm": "NATO",
+    "type": "principal",
+    "weight": 8.0,
+    "aliases": [
+      {
+        "alias": "NATO",
+        "weight": 8.5
+      },
+      {
+        "alias": "OTAN",
+        "weight": 8.3
+      },
+      {
+        "alias": "N.A.T.O",
+        "weight": 7.5
+      },
+      {
+        "alias": "North Atlantic Treaty Organization",
+        "weight": 7.2
+      },
+      {
+        "alias": "North Atlantic Alliance",
+        "weight": 7.0
+      },
+      {
+        "alias": "Organización del Tratado del Atlántico Norte",
+        "weight": 7.0
+      },
+      {
+        "alias": "Организация Североатлантического договора",
+        "weight": 6.8
+      },
+      {
+        "alias": "Організація Північноатлантичного договору",
+        "weight": 6.5
+      },
+      {
+        "alias": "НАТО",
+        "weight": 8.0
+      },
+      {
+        "alias": "Nordatlantikpakt",
+        "weight": 6.8
+      },
+      {
+        "alias": "Nordatlantikpakt-Organisation",
+        "weight": 6.9
+      },
+      {
+        "alias": "Organisation des Nordatlantikvertrags",
+        "weight": 7.2
+      },
+      {
+        "alias": "Organisation du traité de l'Atlantique nord",
+        "weight": 7.4
+      },
+      {
+        "alias": "Nato",
+        "weight": 8.0
+      },
+      {
+        "alias": "Pohjois-Atlantin liitto",
+        "weight": 6.9
+      },
+      {
+        "alias": "Den Nordatlantiske Traktats Organisation",
+        "weight": 7.0
+      },
+      {
+        "alias": "Nordatlantiska fördragsorganisationen",
+        "weight": 7.0
+      },
+      {
+        "alias": "Põhja-Atlandi Lepingu Organisatsioon",
+        "weight": 7.0
+      },
+      {
+        "alias": "Põhja-Atlandi Liit",
+        "weight": 6.8
+      },
+      {
+        "alias": "Ziemeļatlantijas līguma organizācija",
+        "weight": 7.2
+      },
+      {
+        "alias": "Šiaurės Atlanto sutarties organizacija",
+        "weight": 7.2
+      },
+      {
+        "alias": "НАТА",
+        "weight": 8.0
+      },
+      {
+        "alias": "Арганізацыя Паўночнаатлантычнага дагавора",
+        "weight": 7.2
+      },
+      {
+        "alias": "Паўночнаатлантычны альянс",
+        "weight": 6.9
+      },
+      {
+        "alias": "Organizacja Traktatu Północnoatlantyckiego",
+        "weight": 7.4
+      },
+      {
+        "alias": "Sojusz Północnoatlantycki",
+        "weight": 7.2
+      },
+      {
+        "alias": "Organizácia Severoatlantickej zmluvy",
+        "weight": 7.2
+      },
+      {
+        "alias": "Severoatlantická aliancia",
+        "weight": 7.0
+      },
+      {
+        "alias": "Organizația Tratatului Atlanticului de Nord",
+        "weight": 7.4
+      },
+      {
+        "alias": "Alianța Nord-Atlantică",
+        "weight": 7.2
+      },
+      {
+        "alias": "الناتو",
+        "weight": 8.0
+      },
+      {
+        "alias": "منظمة حلف شمال الأطلسي",
+        "weight": 7.4
+      },
+      {
+        "alias": "حلف شمال الأطلسي",
+        "weight": 7.2
+      },
+      {
+        "alias": "北约",
+        "weight": 8.0
+      },
+      {
+        "alias": "北大西洋公约组织",
+        "weight": 7.6
+      },
+      {
+        "alias": "北約",
+        "weight": 8.0
+      },
+      {
+        "alias": "北大西洋公約組織",
+        "weight": 7.6
+      },
+      {
+        "alias": "Північноатлантичний альянс",
+        "weight": 6.8
+      },
+      {
+        "alias": "Североатлантический альянс",
+        "weight": 6.9
+      }
+    ]
+  },
+  {
+    "name": "Russia",
+    "entity_norm": "Russia",
+    "type": "principal",
+    "weight": 8.0,
+    "aliases": [
+      {
+        "alias": "Russia",
+        "weight": 8.5
+      },
+      {
+        "alias": "Rusia",
+        "weight": 8.3
+      },
+      {
+        "alias": "Federación Rusa",
+        "weight": 7.5
+      },
+      {
+        "alias": "Russian Federation",
+        "weight": 7.5
+      },
+      {
+        "alias": "Russian Fed",
+        "weight": 6.8
+      },
+      {
+        "alias": "Российская Федерация",
+        "weight": 7.8
+      },
+      {
+        "alias": "Российская федерация",
+        "weight": 7.8
+      },
+      {
+        "alias": "Российской Федерации",
+        "weight": 7.6
+      },
+      {
+        "alias": "России",
+        "weight": 7.3
+      },
+      {
+        "alias": "Россия",
+        "weight": 7.3
+      },
+      {
+        "alias": "РФ",
+        "weight": 7.9
+      },
+      {
+        "alias": "россия",
+        "weight": 7.0
+      },
+      {
+        "alias": "российская федерация",
+        "weight": 7.2
+      },
+      {
+        "alias": "Russland",
+        "weight": 8.2
+      },
+      {
+        "alias": "Russische Föderation",
+        "weight": 7.5
+      },
+      {
+        "alias": "Russie",
+        "weight": 8.2
+      },
+      {
+        "alias": "Fédération de Russie",
+        "weight": 7.5
+      },
+      {
+        "alias": "Venäjä",
+        "weight": 8.2
+      },
+      {
+        "alias": "Venäjän federaatio",
+        "weight": 7.4
+      },
+      {
+        "alias": "Rusland",
+        "weight": 8.2
+      },
+      {
+        "alias": "Den Russiske Føderation",
+        "weight": 7.4
+      },
+      {
+        "alias": "Ryssland",
+        "weight": 8.2
+      },
+      {
+        "alias": "Ryska federationen",
+        "weight": 7.4
+      },
+      {
+        "alias": "Venemaa",
+        "weight": 8.2
+      },
+      {
+        "alias": "Vene Föderatsioon",
+        "weight": 7.4
+      },
+      {
+        "alias": "Krievija",
+        "weight": 8.2
+      },
+      {
+        "alias": "Krievijas Federācija",
+        "weight": 7.4
+      },
+      {
+        "alias": "Rusija",
+        "weight": 8.2
+      },
+      {
+        "alias": "Rusijos Federacija",
+        "weight": 7.4
+      },
+      {
+        "alias": "Расія",
+        "weight": 8.2
+      },
+      {
+        "alias": "Расійская Федэрацыя",
+        "weight": 7.4
+      },
+      {
+        "alias": "Rosja",
+        "weight": 8.2
+      },
+      {
+        "alias": "Federacja Rosyjska",
+        "weight": 7.4
+      },
+      {
+        "alias": "Rusko",
+        "weight": 8.2
+      },
+      {
+        "alias": "Ruská federácia",
+        "weight": 7.4
+      },
+      {
+        "alias": "Rusia",
+        "weight": 8.2
+      },
+      {
+        "alias": "Federația Rusă",
+        "weight": 7.4
+      },
+      {
+        "alias": "Росія",
+        "weight": 8.2
+      },
+      {
+        "alias": "Російська Федерація",
+        "weight": 7.4
+      },
+      {
+        "alias": "روسيا",
+        "weight": 8.2
+      },
+      {
+        "alias": "الاتحاد الروسي",
+        "weight": 7.4
+      },
+      {
+        "alias": "俄罗斯",
+        "weight": 8.2
+      },
+      {
+        "alias": "俄罗斯联邦",
+        "weight": 7.4
+      },
+      {
+        "alias": "俄羅斯",
+        "weight": 8.2
+      },
+      {
+        "alias": "俄羅斯聯邦",
+        "weight": 7.4
+      }
+    ]
+  }
+]

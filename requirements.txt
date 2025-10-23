@@ -11,3 +11,9 @@ matplotlib>=3.8
 python-igraph>=0.11 ; sys_platform != 'win32'
 plotly>=5.23
 tqdm>=4.66
+bertopic
+sentence-transformers
+hdbscan
+umap-learn
+stopwordsiso>=0.6
+simplemma>=0.9

@@ -1,227 +1,148 @@
-# SOCIAL ANALYTICS PROJECT · TELEGRAM + X · SENTIMENT · EMOTIONS · NETWORK
+# SOCIAL ANALYSIS PROJECT · TELEGRAM + X
 
-Multichannel social analysis using **Python + Hugging Face** for *sentiment analysis*, *emotion classification*, 
-and *network analysis* (X/Twitter). Exports **Tableau‑ready** datasets and a **.gexf** graph for **Gephi**.  
-Compatible with macOS (Apple Silicon).  
-Tested with Python 3.11 and ARM-friendly requirements.
+Multichannel social analytics pipeline built with Python. The project ingests Telegram and X/Twitter exports, cleans and unifies both sources, scores multilingual sentiment and zero-shot emotions, extracts entity-conditioned context, fits BERTopic, and builds an interaction graph for X. Outputs are optimized for Tableau and Gephi.
 
----
+## Overview
+- Flexible CSV ingestion for Telegram and X with resilient column alias detection.
+- Unified preprocessing pipeline in `src/preprocessing.py` that normalizes metrics and text fields.
+- Hugging Face models: sentiment (`cardiffnlp/twitter-xlm-roberta-base-sentiment`) and emotions (`joeddav/xlm-roberta-large-xnli` by default).
+- Topic discovery via BERTopic with optional disk cache.
+- Entity-aware sentiment/emotion/topic scoring (defaults: NATO/OTAN and Russia).
+- Directed interaction network for X (mentions, replies, retweets, quotes) exported as `.gexf` plus metrics.
 
-## 1) Objective and Scope
-**Analytical Objective:** Detect and monitor relevant actors, influential channels, and emotional discourse peaks around keywords or topics.
-
-**Technical Scope:**
-- Ingests **Telegram** (CSV) and **X/Twitter** (CSV) data exported externally.
-- Unified preprocessing in `src/preprocessing.py`.
-- **Sentiment** model: `cardiffnlp/twitter-xlm-roberta-base-sentiment`.
-- **Emotions** model: zero‑shot XNLI (`joeddav/xlm-roberta-large-xnli`).
-- **X network** (mentions and replies; exports `.gexf` graph and CSV metrics).
-- Final export to `data/processed/` ready for **Tableau**.
-
-> **Note:** The **network** is built **only from X data**; Telegram is used for content and emotion.
-
----
-
-## 2) Repository Structure
+## Repository Layout
 ```text
-social-analytics-project/
+social-analysis-project/
 ├── data/
-│   ├── raw/                        # Original CSVs (telegram.csv, x.csv)
-│   └── processed/                  # Clean, normalized (Tableau-ready)
-│       ├─ all_platforms.csv
-│       ├─ facts_posts.csv
-│       ├─ emotions_long.csv
-│       ├─ telegram_sentiment.csv
-│       ├─ x_sentiment.csv
-│       └─ x_edges.csv              # Edges for Tableau/Gephi (X)
+│   ├── raw/                       # place telegram.csv, x.csv or other raw exports here
+│   └── processed/                 # pipeline outputs (CSV, UTF-8 with BOM)
+├── models/
+│   └── bertopic/                  # optional BERTopic cache (created at runtime)
 ├── results/
-│   ├── graphs/
-│   │   ├─ x_nodes_metrics.csv      # Influence metrics (degree/betweenness/pagerank…)
-│   │   └─ x_interactions.gexf      # Graph for Gephi
-│   └── charts/                     # (optional) exported images
-├── src/
-│   ├── __init__.py
-│   ├── utils.py
+│   ├── graphs/                    # network metrics and GEXF graphs
+│   └── topics/                    # BERTopic summaries and metadata
+├── scripts/
+│   ├── process_all.py             # main entry point
+│   ├── finetune_sentiment.py      # fine-tune Hugging Face sentiment model once enough ground truth exists
+│   └── finetune_topic_classifier.py  # trains a lightweight classifier for topic labeling
+├── src/                           # reusable library modules
 │   ├── preprocessing.py
 │   ├── sentiment.py
 │   ├── emotions.py
+│   ├── entity_analysis.py
+│   ├── entities_runtime.py
+│   ├── topics_bertopic.py
 │   ├── network.py
-├── scripts/
-│   └── process_all.py
+│   └── utils.py
 ├── requirements.txt
 └── README.md
 ```
+> Empty folders include `.gitkeep` files to preserve the tree.
 
----
+## Requirements
+- Python 3.10 or 3.11 (tested on macOS Apple Silicon).
+- `pip`, `venv`, or `conda` for environment management.
+- PyTorch (CPU by default; GPU optional via `--device`).
+- First run requires internet access to download Hugging Face models.
 
-## 3) Requirements and Installation
-- **Python** 3.10–3.11 (recommended)
-- `pip`/`venv` or `conda`
-- *(Optional)* PyTorch with CUDA for GPU acceleration
-
+## Quick Setup
 ```bash
-# create and activate virtual environment
 python -m venv .venv
-# Windows
-.venv\Scripts\activate
-# Linux/Mac
-source .venv/bin/activate
-
-# install dependencies
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
----
+## Expected Inputs
+### Telegram (`data/raw/telegram.csv`)
+- Required columns detected automatically: `timestamp`, `channel`, `messageId`, `summary/text`.
+- Metric aliases (`reactions`, `forwards`, `views`, etc.) are mapped to the unified analytics columns `likes`, `retweets`, `replies`, `quotes`, `views`.
+- Generates cleaned fields such as `text_clean`, `emoji_count`, `uid`, `link`.
 
-## 4) Input Data
-### 4.1 Telegram (`data/raw/telegram.csv`)
-**Required fields:** `timestamp, channel, messageId, uid, kind, summary, link, lang`  
-The pipeline renames `summary`→`text` and `channel`→`author`.
+### X / Twitter (`data/raw/x.csv`)
+- Detects aliases for `Tweet ID`, `URL`, `Content`, `Author`, `Language`, metrics, and dates.
+- Missing `Tweet ID` values are inferred from URLs or replaced with a deterministic hash.
+- Normalizes dates to `YYYY-MM-DD` and extracts emojis/mentions when available.
 
-### 4.2 X/Twitter (`data/raw/x.csv`)
-**Required fields:**  
-`Tweet ID, URL, Content, Language, Likes, Retweets, Replies, Quotes, Views, Date, Is Reply, Conversation ID, Reply to userid, Author ID, Author Name, Author Profile URL, Hashtags, Hashtags counts, MentionedUsers, Quoted X ID, Quoted Tweet URL, Retweeted X ID, Retweeted X URL`
+Both readers accept `, ; \t |` separators, UTF-8 with or without BOM, and skip malformed lines with `on_bad_lines="skip"`.
 
-> Handles slight variations/typos (e.g., `Reply told` → `Reply to userid`).
-
----
-
-## 5) Pipeline Execution
+## Running the Pipeline
 ```bash
-python scripts/process_all.py --telegram data/raw/telegram.csv --x data/raw/x.csv --device -1   # CPU (-1) or GPU id (0)
-```
-**Parameters:**
-- `--telegram`: path to Telegram CSV (optional)
-- `--x`: path to X CSV (optional)
-- `--max_rows`: limits rows for testing (`0` = all)
-- `--device`: `-1` for CPU, `0` for first GPU, etc.
-- `--emotion_model`: name of zero‑shot model for emotions
-
-**Expected console output:**
-```
-✔ TG processed → data/processed/telegram_sentiment.csv
-✔ X processed → data/processed/x_sentiment.csv
-✔ X network → results/graphs/x_interactions.gexf, results/graphs/x_nodes_metrics.csv, data/processed/x_edges.csv
-✔ facts_posts.csv, emotions_long.csv, all_platforms.csv generated in data/processed/
+python scripts/process_all.py \
+  --telegram data/raw/telegram.csv \
+  --x data/raw/x.csv \
+  --device -1 \
+  --max_rows 0 \
+  --emotion_model joeddav/xlm-roberta-large-xnli \
+  --entities "OTAN,Rusia" \
+  --entity_window 160
 ```
 
----
+Key parameters:
+- `--telegram`, `--x`: CSV file paths (optional per platform).
+- `--max_rows`: limit rows for smoke tests (`0` keeps all data).
+- `--device`: GPU index (0,1,...) or CPU (`-1`).
+- `--emotion_model`: zero-shot model name; switch to `MoritzLaurer/mMiniLMv2-L6-mnli-xnli` for lighter workloads.
+- `--entities`: comma-separated list of entity names (aliases inferred automatically).
+- `--entities_file`: YAML/JSON/TXT file with custom entity definitions and aliases.
+- `--entity_window`: number of characters captured around each mention for targeted scoring.
 
-## 6) Modules (Technical Overview)
-### `src/preprocessing.py`
-- `load_telegram(path)` → normalize and return unified fields.
-- `load_x(path)` → normalize X export.
-- `unify_frames(df_tg, df_x)` → merge both sources for Tableau.
-- Helpers: `normalize_whitespace`, `extract_emojis`, list parsing.
+Directories are created on demand through `utils.ensure_dirs`.
 
-### `src/sentiment.py`
-- Model: `cardiffnlp/twitter-xlm-roberta-base-sentiment` (multilingual).
-- `add_sentiment` adds: `sentiment_label`, `sentiment_score`, `sentiment_dist` (dict).
-- Configurable batch size (default `64`).
+## Core Outputs (`data/processed/`)
+- `telegram_preprocessed.csv`, `x_preprocessed.csv`: platform snapshots with normalized metrics ready for downstream ingestion.
+- `all_platforms.csv`: combined dataset containing topic assignment, aggregated entity metrics, impact_score, cleaned topic text (`text_topic`), and per-row entity mention payloads (JSON).
+- `facts_posts.csv`: Tableau-ready fact table including engagement, stance, impact_score per post, topic terms (`topic_terms`), expanded emotion probabilities (`emotion_prob_*`), principal topic labels (`manual_label_topic` / `manual_label_subtopic`), and `related_entities` lists such as `"Prime Minister - Russia"`.
+- `facts_posts_tableau.csv`: compact derivative with helper columns (`date`, `text_trunc`, `entity_sentiment_polarity` as JSON per entity) that leaves the original untouched.
+- `emotions_long.csv`: tidy emotion probabilities (`item_id`, `emotion`, `prob`).
+- `topics_assignments.csv`, `topics_summary_daily.csv`: BERTopic assignments and daily evolution, enriched with `manual_label_topic` and `manual_label_subtopic` (either curated or model-predicted).
+- `entity_mentions.csv`, `entity_topic_summary.csv`: entity-conditioned sentiment, stance, impact_score, and emotion aggregations.
+- `x_edges.csv`: edge list for Tableau/Gephi workflows.
+- `../results/graphs/x_nodes_metrics.csv`, `../results/graphs/x_interactions.gexf`: network metrics and GEXF graph.
+- `../results/topics/topic_info.csv`: topic catalogue exported by BERTopic.
+- `data/ground_truth/entity_sentiment_finetune.csv`, `data/ground_truth/topics_manual_finetune.csv`: auto-generated once the manual ground truth surpasses >2000 entity mentions or >200 topics.
 
-### `src/emotions.py`
-- Zero-shot: `joeddav/xlm-roberta-large-xnli` (or lightweight `MoritzLaurer/mMiniLMv2-L6-mnli-xnli`).
-- `add_emotions` adds: `emotion_label`, `emotion_scores` (dict of 10 emotions).
-- Handles empty texts gracefully.
+> All CSV files use `;` as separator and `utf-8-sig` encoding for compatibility with Excel/Tableau.
 
-### `src/network.py`
-- **Network built only from X data**: mentions and replies, adds `weight` per directed pair.
-- `build_x_graph(df_x)` → `nx.DiGraph` with nodes and edges.
-- `graph_metrics(G)` → compute `degree, in_degree, out_degree, betweenness, eigenvector, pagerank, label`.
-- `export_gexf(G, path)` → save for Gephi.
-- `edges_from_x(df_x)` → `src_user, dst_user, edge_kind, weight, first_ts, last_ts`.
+## Key Components
+- `src/preprocessing.py`: resilient CSV loaders, date normalization, emoji extraction, unified schema (`unify_frames`), and multilingual stopword removal/lemmatization for topic modeling (`text_topic`).
+- `src/sentiment.py`: batch wrapper around the multilingual sentiment pipeline (XLM-R) returning full distributions. If `models/sentiment_finetuned/` exists, the fine-tuned checkpoint is loaded automatically.
+- `src/emotions.py`: multilingual zero-shot classifier with configurable batches and model name.
+- `src/network.py`: builds the directed X graph and exports metrics/edges.
+- `src/topics_bertopic.py`: trains or reloads BERTopic with custom multilingual stopword-aware vectorization, transforms documents, and summarizes topics over time.
+- `src/entities_runtime.py`: loads entities from CLI arguments or auxiliary files.
+- `src/entity_analysis.py`: detects mentions, scores targeted sentiment/emotions, and aggregates by entity/topic.
+- `src/utils.py`: shared helpers (directory creation, source normalization, Tableau-friendly CSV export).
 
-### `src/utils.py`
-- `normalize_source(df)` → ensure `X`/`Telegram` consistency.
-- `add_engagement(df)` → sum of `likes+retweets+replies+quotes` (0 for TG).
-- `add_dominant_emotion(df)` → infer `emotion_label` from `emotion_scores`.
-- `emotions_to_long(df)` → expand `emotion_scores` to **long format**.
-- `export_tableau_csv(df, path)` → robust export (UTF‑8‑BOM; `sep=';'`).
+## Ground Truth & Fine-tuning Workflow
 
-### `scripts/process_all.py`
-- Orchestrates **load → sentiment → emotions → X network → unified → export**.
-- Flags: `--device`, `--max_rows`, `--emotion_model`.
+1. **Grow the ground truth**
+   - `python data/ground_truth/update_entity_sentiment_labels.py --sample-size 25 --seed 123` samples new mentions (skipping duplicates) and updates `data/ground_truth/entity_sentiment_labels.csv`. It will also attempt to create `entity_sentiment_finetune.csv` once >2000 rows have a filled `sentiment_manual` value.
+   - `python data/ground_truth/update_topics_manual_labels.py --sort` keeps the manual topics table aligned with the detected topics. When >200 topics have both `manual_label_topic` and `manual_label_subtopic`, it emits `topics_manual_finetune.csv`.
 
----
+2. **Train custom models (optional once fine-tuning datasets exist):**
+   - `python scripts/finetune_sentiment.py` fine-tunes the base sentiment model and stores the checkpoint under `models/sentiment_finetuned/`; `SentimentScorer` picks it up automatically.
+   - `python scripts/finetune_topic_classifier.py` trains lightweight classifiers (TF-IDF + Logistic Regression) for topic and subtopic labels and writes `models/topic_classifier/topic_classifier.joblib`, which `process_all.py` uses to backfill `manual_label_topic` / `manual_label_subtopic` when the manual columns are empty.
 
-## 7) Outputs (Data Dictionary)
-- **`data/processed/facts_posts.csv`** — main Tableau dataset (*Overview/Influencers*).  
-  Fields: `source, timestamp, author, item_id, lang, sentiment_label, sentiment_score, emotion_label, emoji_count, text_clean, link, likes, retweets, replies, quotes, engagement`.
+3. **Re-run the pipeline**
+   - Execute `python scripts/process_all.py ...` again so the updated models are applied and the Tableau-ready CSVs are regenerated.
 
-- **`data/processed/emotions_long.csv`** — for heatmaps and radial plots (*Emotions & Narratives*).  
-  Schema: `item_id, source, emotion, prob, sentiment_label, lang, author, timestamp`.
+> Each script checks thresholds and file existence before running, so nothing breaks if the manual reviews are still below the minimum.
 
-- **`data/processed/x_edges.csv`** — for Sankey diagrams or direct import to Gephi.  
-  Schema: `src_user, dst_user, edge_kind, weight, first_ts, last_ts`.
+## Topics and Entity Analytics
+- BERTopic is trained on the combined `text_topic` corpus (lemmatized + stopword-free); if `models/bertopic/global/` already exists the cached model is reused.
+- Topic assignments populate `topic_id`, `topic_label`, and `topic_score` within the unified dataset.
+- Entity analysis supports CLI lists or structured files, and persists `entity_mentions` JSON per post for dashboarding.
+- `entity_topic_summary.csv` stores stance indices/labels, impact_score rollups, and average emotion distributions per `(entity, topic_id)`.
+- `aggregate_mentions_per_item` exposes post-level sentiment, stance, impact_score, and entity coverage (`entities_detected`) for dashboards.
 
-- **`results/graphs/x_nodes_metrics.csv`** — influence metrics joined with sentiment/emotion.  
-  Fields: `node, degree, in_degree, out_degree, betweenness, eigenvector, pagerank, label`.
+## Best Practices & Troubleshooting
+- **Large models:** if memory is constrained, switch to a lighter emotion model or reduce the batch size in the entity scorer (`score_entity_mentions`).
+- **Sparse graph:** inspect `data/processed/x_edges.csv` to confirm mention/reply extraction in the X export.
+- **Date issues:** loaders normalize to `YYYY-MM-DD`; verify `timestamp` if the source includes time zones.
+- **Reproducibility:** BERTopic uses a fixed `seed` to stabilize topic assignments.
 
-- **`results/graphs/x_interactions.gexf`** — open in **Gephi** for layout and communities.
-
----
-
-## 8) Gephi (Minimum Steps)
-1. Open `results/graphs/x_interactions.gexf` → *Directed* ✓  
-2. **Layout:** *ForceAtlas2* (Scaling 10–50; Gravity 1–5; Prevent overlap ✓)  
-3. **Appearance:** node size = `Degree`/`Pagerank`; color = **Modularity** (computed in Gephi)  
-4. **Labels:** enable + *Label Adjust*  
-5. **Export:** PNG/SVG or save `.gexf` with positions
-
-> **Empty Graph Tip:** If few edges or most weights=1, check `MentionedUsers` and `Reply to userid` in X CSV. Enable extraction of `@handles` from text/URLs if missing.
-
----
-
-## 9) Tableau (Minimum Viable Setup)
-- Connect to `data/processed/` + `results/graphs/x_nodes_metrics.csv`.  
-- Create a **Data Extract**.  
-- Relate by `author` ↔ `label` (or `@handle` if unified).
-
-**Quick Views:**
-- *Timeline:* `COUNTD(item_id)` by day, colored by `sentiment_label`.
-- *Top Authors:* bar chart by `author` with `COUNTD(item_id)` and `AVG(sentiment_score)`.
-- *Emotions Heatmap:* using `emotions_long.csv` (`emotion`×`author`, color=`AVG(prob)`).
-
----
-
-## 10) Suggested Improvements (Denser X Network)
-1. Flexible column normalization (aliases/typos).  
-2. Extract `@handles` from **text** and **URLs** (retweets/quotes).  
-3. Label nodes with `@handle` when available (more readable than ID).  
-4. Include `retweet` and `quote` edges if available.  
-5. Weighted metrics so `degree/pagerank` reflect interaction strength.
-
-> These enhancements will be available in an alternative version of `preprocessing.py` and `network.py` and have to be integrated.
-
----
-
-## 11) Performance and Reproducibility
-- **Batching:** `add_sentiment(batch_size=64)`, `add_emotions(batch_size=16)`.
-- **CPU vs GPU:** `--device 0` for CUDA; `--device -1` for CPU.
-- **Export:** `export_tableau_csv` uses `utf-8-sig` and `sep=';'`.
-
----
-
-## 12) Troubleshooting
-- **Sparse graph:** check `data/processed/x_edges.csv`; if poor, extract `@handles` from text/URLs.  
-- **Missing columns (X):** aliases included; extend if your exporter uses different names.  
-- **Memory (emotions):** lower `batch_size` or use the lightweight model.
-
----
-
-## 13) Short Roadmap
-- [ ] Thematic filter (*keyword sets*) for Tableau.  
-- [ ] Export Gephi node positions (`node_positions.csv`) for reproducible layouts in Tableau.  
-- [ ] More robust language detection (fallback).  
-- [ ] CI to regenerate outputs from new CSVs.
-
----
-
-## 14) Credits
-Models: CardiffNLP and Hugging Face community  
-Libraries: `transformers`, `pandas`, `networkx`, `tqdm`, `emoji`
-
-## Author
-
-**Rodrigo Medrano**  
-_Year: 2025_
+## Credits
+- Models: CardiffNLP and the Hugging Face community.
+- Core libraries: `transformers`, `pandas`, `networkx`, `tqdm`, `emoji`, `bertopic`, `sentence-transformers`.
+- Author: Rodrigo Medrano (2025).

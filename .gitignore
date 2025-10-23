@@ -43,6 +43,8 @@ results/charts/**
 
 # === Archivos grandes/temporales opcionales ===
 *.csv
+!data/ground_truth/entity_sentiment_finetune.csv
+!data/ground_truth/topics_manual_finetune.csv
 *.tsv
 *.parquet
 *.feather
@@ -51,6 +53,7 @@ results/charts/**
 *.svg
 *.jpg
 *.jpeg
+bertopic_model.pkl
 
 # Si tienes algún .env local para pruebas
 .env

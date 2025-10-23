@@ -12,8 +12,185 @@ Preprocesamiento para Telegram y X (fecha simple):
 from __future__ import annotations
 import re
 import hashlib
-from typing import List, Optional
+from pathlib import Path
+from typing import Dict, Iterable, List, Optional
 import pandas as pd
+from stopwordsiso import stopwords as stopwords_iso
+from simplemma import simple_tokenizer, lemmatize
+
+_LANG_FALLBACK = {
+    "en": "en",
+    "es": "es",
+    "en-gb": "en",
+    "en-us": "en",
+    "en_uk": "en",
+    "ru": "ru",
+    "uk": "uk",
+    "ua": "uk",
+    "pl": "pl",
+    "cs": "cs",
+    "sk": "sk",
+    "ro": "ro",
+    "fr": "fr",
+    "de": "de",
+    "it": "it",
+    "pt": "pt",
+    "tr": "tr",
+    "sv": "sv",
+    "fi": "fi",
+    "lt": "lt",
+    "lv": "lv",
+    "et": "et",
+    "da": "da",
+    "no": "no",
+    "bg": "bg",
+    "sr": "sr",
+    "mk": "mk",
+    "hu": "hu",
+    "ar": "ar",
+}
+
+_GLOBAL_STOPWORDS: Dict[str, set] = {}
+_DEFAULT_LANG = "en"
+_TOKEN_MIN_LENGTH = 3
+_TOPIC_STOPWORDS_EXTRA = {"https", "http", "amp", "rt", "t.me"}
+
+_LANG_COUNTRY_LOOKUP_CACHE: Optional[Dict[str, List[Dict[str, float]]]] = None
+_LANG_COUNTRY_LOOKUP_PATH = (
+    Path(__file__).resolve().parent.parent / "data" / "raw" / "lang_country_lookup.csv"
+)
+
+def _normalize_lang_code(lang: Optional[str]) -> str:
+    if not isinstance(lang, str) or not lang.strip():
+        return _DEFAULT_LANG
+    token = lang.strip().lower().replace("_", "-")
+    token = token.split("-")[0]
+    if token in _LANG_FALLBACK:
+        token = _LANG_FALLBACK[token]
+    return token if token else _DEFAULT_LANG
+
+def _stopwords_for(lang: str) -> set:
+    if lang not in _GLOBAL_STOPWORDS:
+        try:
+            sw = set(stopwords_iso(lang))
+        except Exception:
+            sw = set()
+        if lang != _DEFAULT_LANG and not sw:
+            sw = _stopwords_for(_DEFAULT_LANG)
+        _GLOBAL_STOPWORDS[lang] = sw | _TOPIC_STOPWORDS_EXTRA
+    return _GLOBAL_STOPWORDS[lang]
+
+def preprocess_for_topics(text: str, lang: Optional[str]) -> str:
+    if not isinstance(text, str):
+        return ""
+    lowered = text.strip().lower()
+    if lowered in {"", "nan", "none", "null"}:
+        return ""
+    lang_code = _normalize_lang_code(lang)
+    stopwords = _stopwords_for(lang_code)
+    processed: List[str] = []
+    for token in simple_tokenizer(text):
+        token_lower = token.lower()
+        if len(token_lower) < _TOKEN_MIN_LENGTH and not token_lower.isdigit():
+            continue
+        if token_lower in stopwords:
+            continue
+        lemma = token_lower
+        try:
+            lemma_candidate = lemmatize(token_lower, lang=lang_code)
+            if lemma_candidate:
+                lemma = lemma_candidate.lower()
+        except Exception:
+            pass
+        if len(lemma) < _TOKEN_MIN_LENGTH and not lemma.isdigit():
+            continue
+        if lemma in stopwords:
+            continue
+        processed.append(lemma)
+    return " ".join(processed)
+
+def _prepare_topic_series(texts: Iterable[str], langs: Iterable[str]) -> List[str]:
+    return [preprocess_for_topics(txt, lang) for txt, lang in zip(texts, langs)]
+
+
+def _load_lang_country_lookup() -> Dict[str, List[Dict[str, float]]]:
+    global _LANG_COUNTRY_LOOKUP_CACHE
+    if _LANG_COUNTRY_LOOKUP_CACHE is not None:
+        return _LANG_COUNTRY_LOOKUP_CACHE
+
+    table: Dict[str, List[Dict[str, float]]] = {}
+    if _LANG_COUNTRY_LOOKUP_PATH.exists():
+        try:
+            lookup_df = pd.read_csv(_LANG_COUNTRY_LOOKUP_PATH)
+            required_cols = {"lang", "country", "weight"}
+            if required_cols.issubset(set(lookup_df.columns)):
+                for lang_code, group in lookup_df.groupby("lang"):
+                    lang_token = str(lang_code).strip().lower()
+                    if not lang_token:
+                        continue
+                    normalized_lang = _normalize_lang_code(lang_token)
+                    records: List[Dict[str, float]] = []
+                    for _, row in group.iterrows():
+                        country = str(row.get("country") or "").strip()
+                        if not country:
+                            continue
+                        weight_raw = row.get("weight")
+                        try:
+                            weight_val = float(weight_raw)
+                        except (TypeError, ValueError):
+                            weight_val = 0.0
+                        if weight_val < 0:
+                            weight_val = 0.0
+                        records.append({"country": country, "weight": weight_val})
+                    total_weight = sum(entry["weight"] for entry in records)
+                    if total_weight > 0:
+                        normalized_records = [
+                            {"country": entry["country"], "weight": entry["weight"] / total_weight}
+                            for entry in records
+                        ]
+                    else:
+                        normalized_records = []
+                    if normalized_records:
+                        table[normalized_lang] = normalized_records
+                        raw_key = lang_token
+                        if raw_key != normalized_lang:
+                            table[raw_key] = [dict(entry) for entry in normalized_records]
+        except Exception:
+            table = {}
+    _LANG_COUNTRY_LOOKUP_CACHE = table
+    return table
+
+
+def _parse_geolocation_tokens(value: str) -> List[str]:
+    if not isinstance(value, str):
+        return []
+    value = value.strip()
+    if not value:
+        return []
+    tokens = [token.strip() for token in re.split(r"[;,/|]", value) if token.strip()]
+    if tokens:
+        return tokens
+    return [value]
+
+
+def _geo_country_distribution(geo_value: str, lang_value: str) -> List[Dict[str, object]]:
+    tokens = _parse_geolocation_tokens(geo_value)
+    if tokens:
+        weight = 1.0 / len(tokens)
+        return [
+            {"country": token, "weight": weight, "method": "reported"}
+            for token in tokens
+        ]
+
+    lang_lookup = _load_lang_country_lookup()
+    lang_key = _normalize_lang_code(lang_value)
+    records = lang_lookup.get(lang_key) or lang_lookup.get(str(lang_value).strip().lower(), [])
+    if records:
+        return [
+            {"country": entry["country"], "weight": float(entry["weight"]), "method": "lang_lookup"}
+            for entry in records
+        ]
+    return []
 
 # =========================
 # Lector CSV robusto
@@ -145,32 +322,134 @@ def _first_col(df: pd.DataFrame, names: List[str]) -> Optional[str]:
 # Telegram
 # =========================
 def load_telegram(path: str) -> pd.DataFrame:
-    df = _read_csv_utf8(path)
-    required = ["timestamp", "channel", "messageId", "uid", "kind", "summary", "link", "lang"]
-    missing = [c for c in required if c not in df.columns]
+    """
+    Lee el CSV de Telegram y homologa los campos analíticos con los de X.
+    - Detecta alias comunes (timestamp, texto, métricas) para tolerar cambios de esquema.
+    - Normaliza fecha a YYYY-MM-DD y añade columnas vacías si faltan.
+    """
+    df = _read_csv_utf8(path).copy()
+
+    timestamp_aliases = ["timestamp", "date", "datetime", "created_at", "dt"]
+    channel_aliases = ["channel", "channel_name", "chat", "chat_name", "author", "from"]
+    message_aliases = ["messageId", "message_id", "id", "msg_id"]
+    uid_aliases = ["uid", "message_uid", "item_uid", "permalink_uid"]
+    kind_aliases = ["kind", "media_kind", "type"]
+    text_aliases = ["text", "message", "content", "body"]
+    caption_aliases = ["caption", "media_caption", "message_caption", "text_caption"]
+    summary_aliases = ["summary", "gemini_summary", "ai_summary"]
+    link_aliases = ["link", "permalink", "url", "message_link"]
+    lang_aliases = ["lang", "language", "locale"]
+    geo_aliases = [
+        "geolocation",
+        "geo_location",
+        "geo",
+        "location",
+        "location_name",
+        "country",
+        "countries",
+    ]
+
+    c_timestamp = _first_col(df, timestamp_aliases)
+    c_channel = _first_col(df, channel_aliases)
+    c_message = _first_col(df, message_aliases)
+    c_uid = _first_col(df, uid_aliases)
+    c_kind = _first_col(df, kind_aliases)
+    c_text = _first_col(df, text_aliases)
+    c_caption = _first_col(df, caption_aliases)
+    c_summary = _first_col(df, summary_aliases)
+    c_link = _first_col(df, link_aliases)
+    c_lang = _first_col(df, lang_aliases)
+    c_geo = _first_col(df, geo_aliases)
+
+    text_source_col = c_text or c_caption or c_summary
+    missing = [("timestamp", c_timestamp), ("channel", c_channel), ("messageId", c_message), ("text", text_source_col)]
+    missing = [field for field, col in missing if col is None]
     if missing:
         raise ValueError(f"Telegram CSV missing required columns: {missing}")
 
-    df = df.copy()
-    df = df.rename(columns={"summary": "text", "channel": "author"})
-    df["source"] = "Telegram"
-    df["text_clean"] = df["text"].apply(normalize_whitespace)
-    df["emojis"] = df["text"].apply(extract_emojis)
-    df["emoji_count"] = df["emojis"].apply(len)
+    # Normalización básica de strings
+    def _as_str(col_name: str) -> pd.Series:
+        if col_name and (col_name in df.columns):
+            series = df[col_name].fillna("")
+            return series.astype(str)
+        return pd.Series([""] * len(df), index=df.index, dtype="object")
 
-    # FECHA normalizada (YYYY-MM-DD)
-    df["timestamp"] = _normalize_date_series(df["timestamp"])
+    out = pd.DataFrame(index=df.index)
+    out["source"] = "Telegram"
+    out["messageId"] = _as_str(c_message)
+    out["author"] = _as_str(c_channel)
+    out["kind"] = _as_str(c_kind)
+    out["lang"] = _as_str(c_lang)
+    base_series = _as_str(text_source_col)
+    caption_series = _as_str(c_caption)
+    summary_series = _as_str(c_summary)
 
-    # Tipos string
-    for c in ("timestamp", "lang", "messageId", "uid", "kind", "author", "link"):
-        if c in df.columns:
-            df[c] = df[c].astype(str)
+    combined: List[str] = []
+    for base, caption, summary in zip(base_series, caption_series, summary_series):
+        pieces = []
+        for value in (base, caption, summary):
+            cleaned = str(value or "").strip()
+            if cleaned and cleaned not in pieces:
+                pieces.append(cleaned)
+        combined.append("\n".join(pieces))
 
-    out_cols = [
+    out["text"] = pd.Series(combined, index=out.index)
+    out["text_caption"] = caption_series
+    out["text_summary"] = summary_series
+    out["link"] = _as_str(c_link)
+    out["geolocation"] = _as_str(c_geo)
+    out["geolocation"] = out["geolocation"].astype(str).str.strip()
+
+    if c_uid:
+        out["uid"] = _as_str(c_uid)
+    else:
+        out["uid"] = (out["author"].str.strip() + ":" + out["messageId"].str.strip()).str.strip(":")
+
+    # Texto limpio + emojis
+    out["text_clean"] = out["text"].apply(normalize_whitespace)
+    out["text_caption_clean"] = out["text_caption"].apply(normalize_whitespace)
+    out["text_summary_clean"] = out["text_summary"].apply(normalize_whitespace)
+    out["emojis"] = out["text"].apply(extract_emojis)
+    out["text_topic"] = _prepare_topic_series(out["text_clean"], out["lang"])
+    out["emoji_count"] = out["emojis"].apply(len)
+
+    # Fecha normalizada (sólo día)
+    out["timestamp"] = _normalize_date_series(_as_str(c_timestamp))
+
+    # Métricas: mapeamos a las mismas columnas que X
+    def _metric(name_list: List[str]) -> pd.Series:
+        col = _first_col(df, name_list)
+        if col and col in df.columns:
+            return pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
+        return pd.Series([0] * len(df), index=df.index)
+
+    out["likes"] = _metric(["likes", "reactions", "reaction_count", "reactions_count", "reactions_total"])
+    out["retweets"] = _metric(["forwards", "forward_count", "shares", "shares_count"])
+    out["replies"] = _metric(["replies", "reply_count", "comments", "comments_count"])
+    out["quotes"] = _metric(["quotes", "quote_count"])
+    out["views"] = _metric(["views", "view_count", "views_count"])
+
+    # Para trazabilidad adicional guardamos métricas originales si existen
+    for original, alias_list in {
+        "telegram_forwards": ["forwards", "forward_count", "shares", "shares_count"],
+        "telegram_reactions": ["reactions", "reaction_count", "reactions_count", "reactions_total"],
+    }.items():
+        col = _first_col(df, alias_list)
+        if col and col in df.columns and original not in out.columns:
+            out[original] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
+
+    out["geo_country_distribution"] = [
+        _geo_country_distribution(geo, lang)
+        for geo, lang in zip(out["geolocation"], out["lang"])
+    ]
+
+    base_cols = [
         "source","timestamp","author","messageId","uid","kind",
         "text","text_clean","link","lang","emojis","emoji_count",
+        "likes","retweets","replies","quotes","views",
     ]
-    return df[out_cols]
+    extras = [c for c in out.columns if c not in base_cols]
+    return out[base_cols + extras]
 
 # =========================
 # X / Twitter
@@ -184,6 +463,17 @@ def load_x(path: str) -> pd.DataFrame:
     lang_aliases = ["Language","language","lang"]
     author_id_aliases = ["Author ID","author id","user_id","User ID"]
     author_aliases = ["Author Name","author name","username","screen_name","Author","Display name"]
+    location_aliases = [
+        "Author Location",
+        "author location",
+        "author_location",
+        "location",
+        "user_location",
+        "user location",
+        "place",
+        "place_full_name",
+        "place name",
+    ]
     url_aliases = ["URL","url","Tweet URL","Tweet link","Link"]
 
     c_id = _first_col(df, id_aliases)
@@ -193,6 +483,7 @@ def load_x(path: str) -> pd.DataFrame:
     c_author_id = _first_col(df, author_id_aliases) or "author_id"
     c_author = _first_col(df, author_aliases) or "author"
     c_url = _first_col(df, url_aliases)
+    c_author_location = _first_col(df, location_aliases)
 
     if c_text is None:
         raise ValueError("X CSV missing tweet text column (e.g., 'Content'/'text').")
@@ -235,13 +526,18 @@ def load_x(path: str) -> pd.DataFrame:
 
     # Resto
     out["author_id"] = df[c_author_id].astype(str)
-    out["author"] = df[c_author].astype(str)
-    out["lang"] = df[c_lang].astype(str)
-    out["text"] = df[c_text].astype(str)
+    out["author"] = df[c_author].fillna("").astype(str)
+    out["lang"] = df[c_lang].fillna("").astype(str)
+    out["text"] = df[c_text].fillna("").astype(str)
     out["text_clean"] = out["text"].apply(normalize_whitespace)
+    out["text_topic"] = _prepare_topic_series(out["text_clean"], out["lang"])
     out["emojis"] = out["text"].apply(extract_emojis)
     out["emoji_count"] = out["emojis"].apply(len)
     out["link"] = df[c_url].astype(str) if c_url and (c_url in df.columns) else ""
+    if c_author_location and c_author_location in df.columns:
+        out["author_location"] = df[c_author_location].fillna("").astype(str).str.strip()
+    else:
+        out["author_location"] = ""
 
     # Engagement tolerante
     def _to_int(series_name_list: List[str]) -> pd.Series:
@@ -257,7 +553,7 @@ def load_x(path: str) -> pd.DataFrame:
     out["views"]  = _to_int(["Views","views","impressions"])
 
     return out[[
-        "source","timestamp","author","tweet_id","text","text_clean","lang","emojis","emoji_count","link",
+        "source","timestamp","author","author_location","tweet_id","text","text_clean","text_topic","lang","emojis","emoji_count","link",
         "likes","retweets","replies","quotes","views"
     ]]
 
@@ -284,9 +580,15 @@ def unify_frames(df_tg: pd.DataFrame | None, df_x: pd.DataFrame | None) -> pd.Da
 
     df = pd.concat(frames, ignore_index=True, sort=False)
 
-    base_cols = ["source","timestamp","author","item_id","text","text_clean","lang","emojis","emoji_count","link"]
+    base_cols = ["source","timestamp","author","item_id","text","text_clean","text_topic","lang","emojis","emoji_count","link"]
     for col in base_cols:
         if col not in df.columns:
             df[col] = None
+
+    metric_cols = ["likes","retweets","replies","quotes","views"]
+    for col in metric_cols:
+        if col not in df.columns:
+            df[col] = 0
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
 
     return df[base_cols + [c for c in df.columns if c not in base_cols]]

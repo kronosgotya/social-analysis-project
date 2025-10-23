@@ -1,0 +1,1062 @@
+[
+  {
+    "name": "United States Air Force",
+    "entity_norm": "US Air Force",
+    "type": "related",
+    "aliases": [
+      {
+        "alias": "US Air Force",
+        "weight": 4.0
+      },
+      {
+        "alias": "United States Air Force",
+        "weight": 4.2
+      },
+      {
+        "alias": "USAF",
+        "weight": 4.5
+      },
+      {
+        "alias": "USAF 🇺🇸",
+        "weight": 4.0
+      },
+      {
+        "alias": "U.S. Air Force",
+        "weight": 4.3
+      },
+      {
+        "alias": "US flygvapen",
+        "weight": 3.5
+      },
+      {
+        "alias": "US luftvåben",
+        "weight": 3.5
+      },
+      {
+        "alias": "US Luftwaffe",
+        "weight": 3.8
+      },
+      {
+        "alias": "armée de l'air américaine",
+        "weight": 3.6
+      },
+      {
+        "alias": "fuerza aérea estadounidense",
+        "weight": 3.7
+      },
+      {
+        "alias": "военно-воздушные силы США",
+        "weight": 3.9
+      },
+      {
+        "alias": "повітряні сили США",
+        "weight": 3.9
+      },
+      {
+        "alias": "Ameerika õhuvägi",
+        "weight": 3.5
+      },
+      {
+        "alias": "ASV gaisa spēki",
+        "weight": 3.5
+      },
+      {
+        "alias": "JAV oro pajėgos",
+        "weight": 3.5
+      },
+      {
+        "alias": "US õhujõud",
+        "weight": 3.4
+      },
+      {
+        "alias": "US flygvapenet",
+        "weight": 3.4
+      },
+      {
+        "alias": "ВПС ЗША",
+        "weight": 3.4
+      },
+      {
+        "alias": "Siły Powietrzne USA",
+        "weight": 3.5
+      },
+      {
+        "alias": "Vzdušné sily USA",
+        "weight": 3.5
+      },
+      {
+        "alias": "Forțele Aeriene SUA",
+        "weight": 3.5
+      },
+      {
+        "alias": "القوات الجوية الأمريكية",
+        "weight": 3.7
+      },
+      {
+        "alias": "美国空军",
+        "weight": 3.8
+      },
+      {
+        "alias": "美國空軍",
+        "weight": 3.8
+      }
+    ],
+    "metadata": {
+      "category": "NATO_military"
+    }
+  },
+  {
+    "name": "Ministry of Defence of the Russian Federation",
+    "entity_norm": "Russian MoD",
+    "type": "related",
+    "aliases": [
+      {
+        "alias": "Ministry of Defence of the Russian Federation",
+        "weight": 4.3
+      },
+      {
+        "alias": "Russian Ministry of Defence",
+        "weight": 4.2
+      },
+      {
+        "alias": "MoD Russia",
+        "weight": 4.0
+      },
+      {
+        "alias": "Минобороны России",
+        "weight": 4.4
+      },
+      {
+        "alias": "Министерство обороны Российской Федерации",
+        "weight": 4.4
+      },
+      {
+        "alias": "Минобороны РФ",
+        "weight": 4.3
+      },
+      {
+        "alias": "МО РФ",
+        "weight": 4.1
+      },
+      {
+        "alias": "Russian MoD",
+        "weight": 4.3
+      },
+      {
+        "alias": "MinDef Rusia",
+        "weight": 3.8
+      },
+      {
+        "alias": "Defensa Rusa",
+        "weight": 3.6
+      },
+      {
+        "alias": "Russisches Verteidigungsministerium",
+        "weight": 3.7
+      },
+      {
+        "alias": "Ministère russe de la Défense",
+        "weight": 3.7
+      },
+      {
+        "alias": "Venäjän puolustusministeriö",
+        "weight": 3.6
+      },
+      {
+        "alias": "Ruslands forsvarsministerium",
+        "weight": 3.6
+      },
+      {
+        "alias": "ryska försvarsministeriet",
+        "weight": 3.6
+      },
+      {
+        "alias": "Venemaa kaitseministeerium",
+        "weight": 3.5
+      },
+      {
+        "alias": "Krievijas aizsardzības ministrija",
+        "weight": 3.5
+      },
+      {
+        "alias": "Rusijos gynybos ministerija",
+        "weight": 3.5
+      },
+      {
+        "alias": "Міністерство оборони Росії",
+        "weight": 3.7
+      },
+      {
+        "alias": "Міноборони РФ",
+        "weight": 3.9
+      },
+      {
+        "alias": "Ministerul Apărării Rusiei",
+        "weight": 3.6
+      },
+      {
+        "alias": "Ministerstwo Obrony Rosji",
+        "weight": 3.6
+      },
+      {
+        "alias": "Ministerstvo obrany Ruska",
+        "weight": 3.6
+      },
+      {
+        "alias": "Міністэрства абароны Расіі",
+        "weight": 3.5
+      },
+      {
+        "alias": "وزارة الدفاع الروسية",
+        "weight": 3.8
+      },
+      {
+        "alias": "俄罗斯国防部",
+        "weight": 3.8
+      },
+      {
+        "alias": "俄羅斯國防部",
+        "weight": 3.8
+      }
+    ],
+    "metadata": {
+      "category": "Russia_military"
+    }
+  },
+  {
+    "name": "Air Defense Identification Zone",
+    "entity_norm": "ADIZ",
+    "type": "related",
+    "aliases": [
+      {
+        "alias": "Air Defense Identification Zone",
+        "weight": 3.8
+      },
+      {
+        "alias": "ADIZ",
+        "weight": 4.0
+      },
+      {
+        "alias": "Zona de Identificación de Defensa Aérea",
+        "weight": 3.6
+      },
+      {
+        "alias": "Зона ПВО",
+        "weight": 3.5
+      },
+      {
+        "alias": "Air Defense ID Zone",
+        "weight": 3.8
+      },
+      {
+        "alias": "Zona ADIZ",
+        "weight": 3.7
+      },
+      {
+        "alias": "ZID Aérea",
+        "weight": 3.5
+      },
+      {
+        "alias": "повітряна зона ППО",
+        "weight": 3.8
+      },
+      {
+        "alias": "ADIZ зона",
+        "weight": 3.9
+      },
+      {
+        "alias": "Ilmapuolustusalue",
+        "weight": 3.4
+      },
+      {
+        "alias": "Luftforsvarszone",
+        "weight": 3.4
+      },
+      {
+        "alias": "Luftverteidigungszone",
+        "weight": 3.4
+      },
+      {
+        "alias": "zone de défense aérienne",
+        "weight": 3.4
+      },
+      {
+        "alias": "zona de identificación aérea",
+        "weight": 3.4
+      },
+      {
+        "alias": "õhukaitsetsoon",
+        "weight": 3.3
+      },
+      {
+        "alias": "pretgaisa aizsardzības zona",
+        "weight": 3.3
+      },
+      {
+        "alias": "oro gynybos zona",
+        "weight": 3.3
+      },
+      {
+        "alias": "luftförsvarszon",
+        "weight": 3.3
+      },
+      {
+        "alias": "зона СПА",
+        "weight": 3.3
+      },
+      {
+        "alias": "Strefa ADIZ",
+        "weight": 3.3
+      },
+      {
+        "alias": "Zóna ADIZ",
+        "weight": 3.3
+      },
+      {
+        "alias": "Zona ADIZ Rom",
+        "weight": 3.3
+      },
+      {
+        "alias": "منطقة ADIZ",
+        "weight": 3.4
+      },
+      {
+        "alias": "防空识别区",
+        "weight": 3.8
+      },
+      {
+        "alias": "防空識別區",
+        "weight": 3.8
+      }
+    ],
+    "metadata": {
+      "category": "airspace"
+    }
+  },
+  {
+    "name": "President of Russia",
+    "entity_norm": "President Russia",
+    "type": "related",
+    "aliases": [
+      {
+        "alias": "Putin",
+        "weight": 8.5
+      },
+      {
+        "alias": "Vladimir Putin",
+        "weight": 8.5
+      },
+      {
+        "alias": "Президент России",
+        "weight": 7.6
+      },
+      {
+        "alias": "Presidente Rusia",
+        "weight": 6.8
+      }
+    ],
+    "metadata": {
+      "country": "Russia",
+      "role": "president"
+    }
+  },
+  {
+    "name": "Minister of Defence of Russia",
+    "entity_norm": "Minister Defense Russia",
+    "type": "related",
+    "aliases": [
+      {
+        "alias": "Andrei Belousov",
+        "weight": 7.9
+      },
+      {
+        "alias": "Belousov",
+        "weight": 7.7
+      },
+      {
+        "alias": "Министр обороны РФ",
+        "weight": 7.2
+      }
+    ],
+    "metadata": {
+      "country": "Russia",
+      "role": "defence_minister"
+    }
+  },
+  {
+    "name": "President of Finland",
+    "entity_norm": "President Finland",
+    "type": "related",
+    "aliases": [
+      {
+        "alias": "Alexander Stubb",
+        "weight": 7.9
+      },
+      {
+        "alias": "Stubb",
+        "weight": 7.5
+      },
+      {
+        "alias": "Presidentti Stubb",
+        "weight": 6.8
+      }
+    ],
+    "metadata": {
+      "country": "Finland",
+      "role": "president"
+    }
+  },
+  {
+    "name": "Minister of Defence of Finland",
+    "entity_norm": "Minister Defense Finland",
+    "type": "related",
+    "aliases": [
+      {
+        "alias": "Antti Häkkänen",
+        "weight": 7.8
+      },
+      {
+        "alias": "Häkkänen",
+        "weight": 7.4
+      },
+      {
+        "alias": "Puolustusministeri Häkkänen",
+        "weight": 6.6
+      }
+    ],
+    "metadata": {
+      "country": "Finland",
+      "role": "defence_minister"
+    }
+  },
+  {
+    "name": "President of Estonia",
+    "entity_norm": "President Estonia",
+    "type": "related",
+    "aliases": [
+      {
+        "alias": "Alar Karis",
+        "weight": 7.8
+      },
+      {
+        "alias": "Karis",
+        "weight": 7.2
+      },
+      {
+        "alias": "Eesti president Karis",
+        "weight": 6.4
+      }
+    ],
+    "metadata": {
+      "country": "Estonia",
+      "role": "president"
+    }
+  },
+  {
+    "name": "Minister of Defence of Estonia",
+    "entity_norm": "Minister Defense Estonia",
+    "type": "related",
+    "aliases": [
+      {
+        "alias": "Hanno Pevkur",
+        "weight": 7.7
+      },
+      {
+        "alias": "Pevkur",
+        "weight": 7.3
+      },
+      {
+        "alias": "Kaitseminister Pevkur",
+        "weight": 6.5
+      }
+    ],
+    "metadata": {
+      "country": "Estonia",
+      "role": "defence_minister"
+    }
+  },
+  {
+    "name": "President of Latvia",
+    "entity_norm": "President Latvia",
+    "type": "related",
+    "aliases": [
+      {
+        "alias": "Edgars Rinkēvičs",
+        "weight": 7.8
+      },
+      {
+        "alias": "Rinkēvičs",
+        "weight": 7.3
+      },
+      {
+        "alias": "Prezidents Rinkēvičs",
+        "weight": 6.5
+      }
+    ],
+    "metadata": {
+      "country": "Latvia",
+      "role": "president"
+    }
+  },
+  {
+    "name": "Minister of Defence of Latvia",
+    "entity_norm": "Minister Defense Latvia",
+    "type": "related",
+    "aliases": [
+      {
+        "alias": "Andris Sprūds",
+        "weight": 7.7
+      },
+      {
+        "alias": "Sprūds",
+        "weight": 7.3
+      },
+      {
+        "alias": "Aizsardzības ministrs Sprūds",
+        "weight": 6.5
+      }
+    ],
+    "metadata": {
+      "country": "Latvia",
+      "role": "defence_minister"
+    }
+  },
+  {
+    "name": "President of Lithuania",
+    "entity_norm": "President Lithuania",
+    "type": "related",
+    "aliases": [
+      {
+        "alias": "Gitanas Nausėda",
+        "weight": 7.8
+      },
+      {
+        "alias": "Nausėda",
+        "weight": 7.3
+      },
+      {
+        "alias": "Prezidentas Nausėda",
+        "weight": 6.5
+      }
+    ],
+    "metadata": {
+      "country": "Lithuania",
+      "role": "president"
+    }
+  },
+  {
+    "name": "Minister of National Defence of Lithuania",
+    "entity_norm": "Minister Defense Lithuania",
+    "type": "related",
+    "aliases": [
+      {
+        "alias": "Dovilė Šakalienė",
+        "weight": 7.6
+      },
+      {
+        "alias": "Šakalienė",
+        "weight": 7.2
+      }
+    ],
+    "metadata": {
+      "country": "Lithuania",
+      "role": "defence_minister"
+    }
+  },
+  {
+    "name": "President of Poland",
+    "entity_norm": "President Poland",
+    "type": "related",
+    "aliases": [
+      {
+        "alias": "Karol Nawrocki",
+        "weight": 7.7
+      },
+      {
+        "alias": "Nawrocki",
+        "weight": 7.2
+      },
+      {
+        "alias": "Prezydent Nawrocki",
+        "weight": 6.4
+      }
+    ],
+    "metadata": {
+      "country": "Poland",
+      "role": "president"
+    }
+  },
+  {
+    "name": "Minister of National Defence of Poland",
+    "entity_norm": "Minister Defense Poland",
+    "type": "related",
+    "aliases": [
+      {
+        "alias": "Władysław Kosiniak-Kamysz",
+        "weight": 7.8
+      },
+      {
+        "alias": "Kosiniak-Kamysz",
+        "weight": 7.3
+      },
+      {
+        "alias": "MON szef",
+        "weight": 6.2
+      }
+    ],
+    "metadata": {
+      "country": "Poland",
+      "role": "defence_minister"
+    }
+  },
+  {
+    "name": "President of Belarus",
+    "entity_norm": "President Belarus",
+    "type": "related",
+    "aliases": [
+      {
+        "alias": "Alexander Lukashenko",
+        "weight": 7.9
+      },
+      {
+        "alias": "Lukashenko",
+        "weight": 7.4
+      },
+      {
+        "alias": "Аляксандр Лукашэнка",
+        "weight": 7.0
+      }
+    ],
+    "metadata": {
+      "country": "Belarus",
+      "role": "president"
+    }
+  },
+  {
+    "name": "Minister of Defence of Belarus",
+    "entity_norm": "Minister Defense Belarus",
+    "type": "related",
+    "aliases": [
+      {
+        "alias": "Viktar Khrenin",
+        "weight": 7.7
+      },
+      {
+        "alias": "Khrenin",
+        "weight": 7.3
+      },
+      {
+        "alias": "Министр обороны РБ",
+        "weight": 6.5
+      }
+    ],
+    "metadata": {
+      "country": "Belarus",
+      "role": "defence_minister"
+    }
+  },
+  {
+    "name": "President of Ukraine",
+    "entity_norm": "President Ukraine",
+    "type": "related",
+    "aliases": [
+      {
+        "alias": "Volodymyr Zelenskyy",
+        "weight": 8.1
+      },
+      {
+        "alias": "Zelenskyy",
+        "weight": 8.0
+      },
+      {
+        "alias": "Президент України",
+        "weight": 7.4
+      }
+    ],
+    "metadata": {
+      "country": "Ukraine",
+      "role": "president"
+    }
+  },
+  {
+    "name": "Minister of Defence of Ukraine",
+    "entity_norm": "Minister Defense Ukraine",
+    "type": "related",
+    "aliases": [
+      {
+        "alias": "Denys Shmyhal",
+        "weight": 7.7
+      },
+      {
+        "alias": "Shmyhal",
+        "weight": 7.3
+      },
+      {
+        "alias": "Міністр оборони",
+        "weight": 6.5
+      }
+    ],
+    "metadata": {
+      "country": "Ukraine",
+      "role": "defence_minister"
+    }
+  },
+  {
+    "name": "President of Romania",
+    "entity_norm": "President Romania",
+    "type": "related",
+    "aliases": [
+      {
+        "alias": "Nicușor Dan",
+        "weight": 7.6
+      },
+      {
+        "alias": "Nicusor Dan",
+        "weight": 7.4
+      },
+      {
+        "alias": "Președintele Dan",
+        "weight": 6.4
+      }
+    ],
+    "metadata": {
+      "country": "Romania",
+      "role": "president"
+    }
+  },
+  {
+    "name": "Minister of National Defence of Romania",
+    "entity_norm": "Minister Defense Romania",
+    "type": "related",
+    "aliases": [
+      {
+        "alias": "Liviu-Ionuț Moșteanu",
+        "weight": 7.6
+      },
+      {
+        "alias": "Moșteanu",
+        "weight": 7.2
+      },
+      {
+        "alias": "Ministrul Apărării",
+        "weight": 6.4
+      }
+    ],
+    "metadata": {
+      "country": "Romania",
+      "role": "defence_minister"
+    }
+  },
+  {
+    "name": "Prime Minister of Norway",
+    "entity_norm": "Prime Minister Norway",
+    "type": "related",
+    "aliases": [
+      {
+        "alias": "Jonas Gahr Støre",
+        "weight": 7.7
+      },
+      {
+        "alias": "Støre",
+        "weight": 7.2
+      },
+      {
+        "alias": "Statsminister Støre",
+        "weight": 6.4
+      }
+    ],
+    "metadata": {
+      "country": "Norway",
+      "role": "prime_minister"
+    }
+  },
+  {
+    "name": "Minister of Defence of Norway",
+    "entity_norm": "Minister Defense Norway",
+    "type": "related",
+    "aliases": [
+      {
+        "alias": "Tore O. Sandvik",
+        "weight": 7.6
+      },
+      {
+        "alias": "Sandvik",
+        "weight": 7.2
+      },
+      {
+        "alias": "Forsvarsminister",
+        "weight": 6.3
+      }
+    ],
+    "metadata": {
+      "country": "Norway",
+      "role": "defence_minister"
+    }
+  },
+  {
+    "name": "Prime Minister of Sweden",
+    "entity_norm": "Prime Minister Sweden",
+    "type": "related",
+    "aliases": [
+      {
+        "alias": "Ulf Kristersson",
+        "weight": 7.7
+      },
+      {
+        "alias": "Kristersson",
+        "weight": 7.3
+      },
+      {
+        "alias": "Statsminister Kristersson",
+        "weight": 6.4
+      }
+    ],
+    "metadata": {
+      "country": "Sweden",
+      "role": "prime_minister"
+    }
+  },
+  {
+    "name": "Minister of Defence of Sweden",
+    "entity_norm": "Minister Defense Sweden",
+    "type": "related",
+    "aliases": [
+      {
+        "alias": "Pål Jonson",
+        "weight": 7.7
+      },
+      {
+        "alias": "Pal Jonson",
+        "weight": 7.5
+      },
+      {
+        "alias": "Försvarsminister Jonson",
+        "weight": 6.4
+      }
+    ],
+    "metadata": {
+      "country": "Sweden",
+      "role": "defence_minister"
+    }
+  },
+  {
+    "name": "Finnish Defence Forces",
+    "entity_norm": "Finnish Defence Forces",
+    "type": "related",
+    "aliases": [
+      {
+        "alias": "Puolustusvoimat",
+        "weight": 3.9
+      },
+      {
+        "alias": "Finnish Army",
+        "weight": 3.8
+      },
+      {
+        "alias": "FDF",
+        "weight": 3.7
+      },
+      {
+        "alias": "Suomen armeija",
+        "weight": 3.7
+      }
+    ],
+    "metadata": {
+      "category": "neighbor_military"
+    }
+  },
+  {
+    "name": "Estonian Defence Forces",
+    "entity_norm": "Estonian Defence Forces",
+    "type": "related",
+    "aliases": [
+      {
+        "alias": "Kaitsevägi",
+        "weight": 3.9
+      },
+      {
+        "alias": "Estonian Army",
+        "weight": 3.7
+      },
+      {
+        "alias": "EDF",
+        "weight": 3.6
+      }
+    ],
+    "metadata": {
+      "category": "neighbor_military"
+    }
+  },
+  {
+    "name": "Latvian National Armed Forces",
+    "entity_norm": "Latvian National Armed Forces",
+    "type": "related",
+    "aliases": [
+      {
+        "alias": "NBS",
+        "weight": 3.9
+      },
+      {
+        "alias": "Latvijas armija",
+        "weight": 3.8
+      },
+      {
+        "alias": "Latvian Army",
+        "weight": 3.6
+      }
+    ],
+    "metadata": {
+      "category": "neighbor_military"
+    }
+  },
+  {
+    "name": "Lithuanian Armed Forces",
+    "entity_norm": "Lithuanian Armed Forces",
+    "type": "related",
+    "aliases": [
+      {
+        "alias": "Lietuvos kariuomenė",
+        "weight": 3.9
+      },
+      {
+        "alias": "Lithuanian Army",
+        "weight": 3.7
+      },
+      {
+        "alias": "LKA",
+        "weight": 3.5
+      }
+    ],
+    "metadata": {
+      "category": "neighbor_military"
+    }
+  },
+  {
+    "name": "Polish Armed Forces",
+    "entity_norm": "Polish Armed Forces",
+    "type": "related",
+    "aliases": [
+      {
+        "alias": "Wojsko Polskie",
+        "weight": 4.0
+      },
+      {
+        "alias": "Polish Army",
+        "weight": 3.8
+      },
+      {
+        "alias": "Siły Zbrojne RP",
+        "weight": 3.8
+      }
+    ],
+    "metadata": {
+      "category": "neighbor_military"
+    }
+  },
+  {
+    "name": "Belarusian Armed Forces",
+    "entity_norm": "Belarusian Armed Forces",
+    "type": "related",
+    "aliases": [
+      {
+        "alias": "Белорусская армия",
+        "weight": 3.9
+      },
+      {
+        "alias": "ВС РБ",
+        "weight": 3.9
+      },
+      {
+        "alias": "Беларуская армія",
+        "weight": 3.8
+      }
+    ],
+    "metadata": {
+      "category": "neighbor_military"
+    }
+  },
+  {
+    "name": "Ukrainian Armed Forces",
+    "entity_norm": "Ukrainian Armed Forces",
+    "type": "related",
+    "aliases": [
+      {
+        "alias": "Збройні сили України",
+        "weight": 4.2
+      },
+      {
+        "alias": "ЗСУ",
+        "weight": 4.3
+      },
+      {
+        "alias": "AFU",
+        "weight": 4.2
+      },
+      {
+        "alias": "UAF",
+        "weight": 4.1
+      }
+    ],
+    "metadata": {
+      "category": "neighbor_military"
+    }
+  },
+  {
+    "name": "Romanian Armed Forces",
+    "entity_norm": "Romanian Armed Forces",
+    "type": "related",
+    "aliases": [
+      {
+        "alias": "Forțele Armate Române",
+        "weight": 3.9
+      },
+      {
+        "alias": "Romanian Army",
+        "weight": 3.7
+      }
+    ],
+    "metadata": {
+      "category": "neighbor_military"
+    }
+  },
+  {
+    "name": "Norwegian Armed Forces",
+    "entity_norm": "Norwegian Armed Forces",
+    "type": "related",
+    "aliases": [
+      {
+        "alias": "Forsvaret",
+        "weight": 3.9
+      },
+      {
+        "alias": "Norwegian Army",
+        "weight": 3.7
+      }
+    ],
+    "metadata": {
+      "category": "neighbor_military"
+    }
+  },
+  {
+    "name": "Swedish Armed Forces",
+    "entity_norm": "Swedish Armed Forces",
+    "type": "related",
+    "aliases": [
+      {
+        "alias": "Försvarsmakten",
+        "weight": 3.9
+      },
+      {
+        "alias": "Swedish Armed Forces",
+        "weight": 3.7
+      },
+      {
+        "alias": "SWE Army",
+        "weight": 3.6
+      }
+    ],
+    "metadata": {
+      "category": "ally_support"
+    }
+  }
+]
