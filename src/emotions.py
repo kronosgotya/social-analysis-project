@@ -2,8 +2,10 @@ from __future__ import annotations
 import os
 import pandas as pd
 from transformers import pipeline, AutoTokenizer
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Union
 from tqdm import tqdm
+
+from .utils import resolve_pipeline_device
 
 DEFAULT_EMOTIONS = [
     "joy", "anger", "sadness", "fear", "disgust",
@@ -23,7 +25,7 @@ class EmotionClassifier:
     def __init__(
         self,
         labels: Optional[List[str]] = None,
-        device: Optional[int] = None,
+        device: Optional[Union[int, str]] = None,
         model_name: str = "joeddav/xlm-roberta-large-xnli"
     ):
         self.labels = labels or DEFAULT_EMOTIONS
@@ -39,7 +41,7 @@ class EmotionClassifier:
             task="zero-shot-classification",
             model=model_name,
             tokenizer=tokenizer,
-            device=device if device is not None else -1,
+            device=resolve_pipeline_device(device),
         )
 
     def score_batch(self, texts: List[str]) -> List[Tuple[Optional[str], Dict[str, float]]]:
@@ -99,7 +101,7 @@ def add_emotions(
     df: pd.DataFrame,
     text_col: str = "text_clean",
     batch_size: int = 16,
-    device: Optional[int] = None,
+    device: Optional[Union[int, str]] = None,
     labels: Optional[List[str]] = None,
     model_name: str = "joeddav/xlm-roberta-large-xnli",
     out_label_col: str = "emotion_label",
