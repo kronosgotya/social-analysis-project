@@ -14,18 +14,20 @@ Multichannel social analytics pipeline built with Python. The project ingests Te
 ```text
 social-analysis-project/
 ├── data/
-│   ├── raw/                       # place telegram.csv, x.csv or other raw exports here
-│   └── processed/                 # pipeline outputs (CSV, UTF-8 with BOM)
+│   ├── raw/                                          # place telegram.csv, x.csv or other raw exports here
+│   └── processed/                               # pipeline outputs (CSV, UTF-8 with BOM)
+│   └── ground_truth/                           # manual labelled data which helps fine-tuning (CSV, UTF-8 with BOM)
 ├── models/
-│   └── bertopic/                  # optional BERTopic cache (created at runtime)
+│   └── bertopic/                                   # optional BERTopic cache (created at runtime)
 ├── results/
-│   ├── graphs/                    # network metrics and GEXF graphs
-│   └── topics/                    # BERTopic summaries and metadata
+│   ├── graphs/                                     # network metrics and GEXF graphs
+│   └── topics/                                      # BERTopic summaries and metadata
 ├── scripts/
-│   ├── process_all.py             # main entry point
-│   ├── finetune_sentiment.py      # fine-tune Hugging Face sentiment model once enough ground truth exists
-│   └── finetune_topic_classifier.py  # trains a lightweight classifier for topic labeling
-├── src/                           # reusable library modules
+│   ├── process_all.py                   # main entry point (pipeline + label merge)
+│   ├── finetune_sentiment.py            # fine-tune Hugging Face sentiment model once enough ground truth exists
+│   ├── finetune_topic_classifier.py     # trains the manual topic/subtopic classifier (optional CV)
+│   └── apply_manual_labels.py           # propagates manual labels from topics_manual_labels.csv to processed CSVs
+├── src/                                               # reusable library modules
 │   ├── preprocessing.py
 │   ├── sentiment.py
 │   ├── emotions.py
@@ -42,7 +44,7 @@ social-analysis-project/
 ## Requirements
 - Python 3.10 or 3.11 (tested on macOS Apple Silicon).
 - `pip`, `venv`, or `conda` for environment management.
-- PyTorch (CPU by default; GPU optional via `--device`).
+- PyTorch (CPU by default; GPU optional via `--device`; MPS en Apple Silicon con `--device -2`).
 - First run requires internet access to download Hugging Face models.
 
 ## Quick Setup
@@ -81,7 +83,7 @@ python scripts/process_all.py \
 Key parameters:
 - `--telegram`, `--x`: CSV file paths (optional per platform).
 - `--max_rows`: limit rows for smoke tests (`0` keeps all data).
-- `--device`: GPU index (0,1,...) or CPU (`-1`).
+- `--device`: GPU index (0,1,...) o CPU (`-1`). In Apple Silicon use `-2` or `mps` to force Metal (MPS).
 - `--emotion_model`: zero-shot model name; switch to `MoritzLaurer/mMiniLMv2-L6-mnli-xnli` for lighter workloads.
 - `--entities`: comma-separated list of entity names (aliases inferred automatically).
 - `--entities_file`: YAML/JSON/TXT file with custom entity definitions and aliases.
@@ -113,21 +115,32 @@ Directories are created on demand through `utils.ensure_dirs`.
 - `src/entities_runtime.py`: loads entities from CLI arguments or auxiliary files.
 - `src/entity_analysis.py`: detects mentions, scores targeted sentiment/emotions, and aggregates by entity/topic.
 - `src/utils.py`: shared helpers (directory creation, source normalization, Tableau-friendly CSV export).
+- `scripts/apply_manual_labels.py`: synchronises manual topic labels across processed datasets and produces the missing-label checklist.
 
-## Ground Truth & Fine-tuning Workflow
+## Topic Labelling Workflow
 
-1. **Grow the ground truth**
-   - `python data/ground_truth/update_entity_sentiment_labels.py --sample-size 25 --seed 123` samples new mentions (skipping duplicates) and updates `data/ground_truth/entity_sentiment_labels.csv`. It will also attempt to create `entity_sentiment_finetune.csv` once >2000 rows have a filled `sentiment_manual` value.
-   - `python data/ground_truth/update_topics_manual_labels.py --sort` keeps the manual topics table aligned with the detected topics. When >200 topics have both `manual_label_topic` and `manual_label_subtopic`, it emits `topics_manual_finetune.csv`.
+1. **Refresh the manual topic table (optional but recommended)**
+   - `python scripts/topics_map_labels.py --topic-info results/topics/topic_info.csv` brings the latest BERTopic catalogue together with the historical backups under `results/topics/topic_backup/` and writes `data/ground_truth/topics_manual_labels.csv`.
+   - `python scripts/apply_manual_labels.py` propagates those curated labels into every `data/processed/*.csv` that carries topic columns and generates `results/topics/topics_missing_manual_labels.csv` so you know which clusters still require review.
 
-2. **Train custom models (optional once fine-tuning datasets exist):**
-   - `python scripts/finetune_sentiment.py` fine-tunes the base sentiment model and stores the checkpoint under `models/sentiment_finetuned/`; `SentimentScorer` picks it up automatically.
-   - `python scripts/finetune_topic_classifier.py` trains lightweight classifiers (TF-IDF + Logistic Regression) for topic and subtopic labels and writes `models/topic_classifier/topic_classifier.joblib`, which `process_all.py` uses to backfill `manual_label_topic` / `manual_label_subtopic` when the manual columns are empty.
+2. **Train or refresh the classifier**
+   - You can train without cross-validation:
+     ```bash
+     python scripts/finetune_topic_classifier.py --min-samples-per-class 5 --cv-folds 0
+     ```
+   - Or enable stratified K-fold validation (prints per-fold macro accuracy/F1):
+     ```bash
+     python scripts/finetune_topic_classifier.py --min-samples-per-class 5 --cv-folds 5
+     ```
+   - Under the hood, the script embeds `text_clean` with `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` and fits two balanced `LogisticRegression` models (one for `manual_label_topic`, one for `manual_label_subtopic`). Using cross-validation changes only the evaluation step; the final models are trained on the full dataset and saved to `models/topic_classifier/topic_classifier.joblib`. The classifier only predicts `manual_label_topic` / `manual_label_subtopic`; it never overwrites `topic_id`.
 
-3. **Re-run the pipeline**
-   - Execute `python scripts/process_all.py ...` again so the updated models are applied and the Tableau-ready CSVs are regenerated.
+3. **Run the full pipeline**
+   - `python scripts/process_all.py ...`
+   - In addition to ingesting data, fitting BERTopic, and exporting dashboards, the script performs a final pass (registered via `atexit`) that merges the manual table plus classifier predictions back into every processed CSV and `results/topics/topic_info.csv`.
 
-> Each script checks thresholds and file existence before running, so nothing breaks if the manual reviews are still below the minimum.
+4. **Iterate**
+   - Inspect `results/topics/topics_missing_manual_labels.csv` to identify the next clusters to annotate.
+   - Add the new labels in `facts_posts.csv`, rerun `apply_manual_labels.py`, retrain the classifier, and execute `process_all.py` again. Coverage improves with every loop while preserving human supervision.
 
 ## Topics and Entity Analytics
 - BERTopic is trained on the combined `text_topic` corpus (lemmatized + stopword-free); if `models/bertopic/global/` already exists the cached model is reused.

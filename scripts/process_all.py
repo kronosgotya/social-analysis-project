@@ -1,11 +1,14 @@
 from __future__ import annotations
 import argparse
+import csv
 import json
 from pathlib import Path
 from datetime import datetime, date
 import sys
 import re
-from typing import Dict, Optional, List, Set
+import ast
+from typing import Dict, Optional, List, Set, Any, Iterable
+from collections import Counter
 
 # --- Fix ruta para importar src/*
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,6 +25,8 @@ from src.utils import (  # noqa: E402
     export_tableau_csv, emotions_to_long
 )
 from src.preprocessing import load_telegram, load_x, unify_frames  # noqa: E402
+# SentenceTransformer para clasificador embeddings
+from sentence_transformers import SentenceTransformer  # noqa: E402
 from src.network import (  # noqa: E402
     build_x_graph, graph_metrics, export_gexf,
     edges_from_x, nodes_metrics_df
@@ -67,9 +72,17 @@ ENCODING = "utf-8-sig"
 SEP = ";"
 TOPIC_CLASSIFIER_PATH = Path("models") / "topic_classifier" / "topic_classifier.joblib"
 TOPIC_MANUAL_PATH = Path("data") / "ground_truth" / "topics_manual_labels.csv"
+DEFAULT_CLASSIFIER_EMBED_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+_EMBEDDER_CACHE: Dict[str, SentenceTransformer] = {}
 
 
-def _load_topic_classifier() -> Optional[Dict[str, object]]:
+def _get_embedder(model_name: str) -> SentenceTransformer:
+    if model_name not in _EMBEDDER_CACHE:
+        _EMBEDDER_CACHE[model_name] = SentenceTransformer(model_name)
+    return _EMBEDDER_CACHE[model_name]
+
+
+def _load_topic_classifier() -> Optional[Dict[str, Any]]:
     if not TOPIC_CLASSIFIER_PATH.exists():
         return None
     try:
@@ -77,10 +90,44 @@ def _load_topic_classifier() -> Optional[Dict[str, object]]:
     except Exception as exc:
         print(f"ⓘ Could not load topic classifier ({exc}).")
         return None
-    required_keys = {"vectorizer", "topic_clf", "subtopic_clf"}
-    if not required_keys.issubset(set(model_bundle.keys())):
-        print("ⓘ Topic classifier file is missing expected components; ignoring.")
-        return None
+    keys = set(model_bundle.keys())
+    kind = model_bundle.get("kind")
+    if kind == "sentence-transformer":
+        required = {"topic_clf", "subtopic_clf", "topic_label_encoder", "subtopic_label_encoder", "embedding_model_name"}
+        if not required.issubset(keys):
+            print("ⓘ Topic classifier (embeddings) missing expected components; ignoring.")
+            return None
+    elif kind == "sentence-transformer-multitask":
+        required = {
+            "manual_topic_clf",
+            "manual_subtopic_clf",
+            "manual_topic_label_encoder",
+            "manual_subtopic_label_encoder",
+            "embedding_model_name",
+        }
+        if not required.issubset(keys):
+            # compatibilidad con bundles antiguos
+            legacy_required = {
+                "topic_id_clf",
+                "manual_topic_clf",
+                "manual_subtopic_clf",
+                "topic_id_label_encoder",
+                "manual_topic_label_encoder",
+                "manual_subtopic_label_encoder",
+                "embedding_model_name",
+            }
+            if legacy_required.issubset(keys):
+                # dejamos pasar; las rutas que usan topic_id_clf lo ignorarán
+                pass
+            else:
+                print("ⓘ Topic classifier (multitask) missing expected components; ignoring.")
+                return None
+    else:
+        required_keys = {"vectorizer", "topic_clf", "subtopic_clf"}
+        if not required_keys.issubset(keys):
+            print("ⓘ Topic classifier file is missing expected components; ignoring.")
+            return None
+        model_bundle.setdefault("kind", "tfidf")
     return model_bundle
 
 
@@ -113,6 +160,213 @@ def _topic_terms_to_text(value: object) -> str:
         return text.replace(",", " ").replace("[", " ").replace("]", " ")
     return str(value)
 
+
+def _normalize_label(value: object) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _majority_label(series: pd.Series) -> str:
+    values = [_normalize_label(val) for val in series if _normalize_label(val)]
+    if not values:
+        return ""
+    counter = Counter(values)
+    most_common = counter.most_common()
+    top_count = most_common[0][1]
+    candidates = sorted([label for label, count in most_common if count == top_count])
+    return candidates[0] if candidates else ""
+
+
+def _first_non_empty(seq: Iterable[object]) -> object:
+    for val in seq:
+        if isinstance(val, list) and val:
+            return val
+        if isinstance(val, str) and val.strip():
+            return val
+    return []
+
+
+_SERIES_LINE_PATTERN = re.compile(r"^\s*\d+\s+\[(.*)\]\s*$")
+
+
+def _parse_series_style_terms(text: str) -> List[str]:
+    cleaned = text.replace("\\n", "\n")
+    tokens: List[str] = []
+    for raw_line in cleaned.splitlines():
+        line = raw_line.strip()
+        if not line or "Name:" in line or "dtype" in line:
+            continue
+        match = _SERIES_LINE_PATTERN.match(line)
+        if not match:
+            continue
+        inside = match.group(1)
+        tokens.extend([tok.strip().strip("'\"") for tok in inside.split(",") if tok.strip()])
+    return tokens
+
+
+def _serialize_terms(value: object) -> str:
+    """
+    Serializa términos a JSON garantizando una lista plana de strings legibles.
+    Maneja valores anidados (list[list[str]], tuplas...) y strings con
+    representaciones de listas.
+    """
+
+    if isinstance(value, pd.Series):
+        return _serialize_terms(value.tolist())
+
+    def _maybe_parse_container(text: str) -> object:
+        stripped = text.strip()
+        if not stripped:
+            return []
+        if not (stripped.startswith("[") and stripped.endswith("]")):
+            series_tokens = _parse_series_style_terms(stripped)
+            if series_tokens:
+                return series_tokens
+            return text
+        try:
+            parsed = json.loads(stripped)
+            return parsed
+        except Exception:
+            try:
+                parsed = ast.literal_eval(stripped)
+                return parsed
+            except Exception:
+                series_tokens = _parse_series_style_terms(stripped)
+                if series_tokens:
+                    return series_tokens
+                return text
+
+    def _flatten_terms(obj: object) -> Iterable[str]:
+        if obj is None:
+            return
+        if isinstance(obj, (list, tuple, set)):
+            for item in obj:
+                yield from _flatten_terms(item)
+            return
+        if isinstance(obj, str):
+            parsed = _maybe_parse_container(obj)
+            if parsed is obj:
+                token = obj.strip()
+                if token:
+                    yield token
+            else:
+                yield from _flatten_terms(parsed)
+            return
+        token = str(obj).strip()
+        if token:
+            yield token
+
+    seen: Set[str] = set()
+    ordered: List[str] = []
+    for term in _flatten_terms(value):
+        if term not in seen:
+            seen.add(term)
+            ordered.append(term)
+    formatted = ", ".join(f"'{tok}'" for tok in ordered)
+    return f"[{formatted}]"
+
+
+def _build_subtopic_parent_map(df: pd.DataFrame, topic_col: str, subtopic_col: str) -> Dict[str, str]:
+    mapping: Dict[str, str] = {}
+    conflicts: Set[str] = set()
+    if df is None or df.empty:
+        return mapping
+    for _, row in df.iterrows():
+        topic = _normalize_label(row.get(topic_col))
+        subtopic = _normalize_label(row.get(subtopic_col))
+        if not subtopic or not topic:
+            continue
+        if subtopic not in mapping:
+            mapping[subtopic] = topic
+        elif mapping[subtopic] != topic:
+            conflicts.add(subtopic)
+    for sub in conflicts:
+        mapping.pop(sub, None)
+    return mapping
+
+
+def _enforce_subtopic_hierarchy(df: pd.DataFrame, topic_col: str, subtopic_col: str, mapping: Dict[str, str]) -> None:
+    if df is None or df.empty or not mapping:
+        return
+    if topic_col not in df.columns or subtopic_col not in df.columns:
+        return
+    subtopics = df[subtopic_col].astype(str).str.strip()
+    replacement = subtopics.map(mapping)
+    mask = subtopics != ""
+    mask &= replacement.notna()
+    if mask.any():
+        df.loc[mask, topic_col] = replacement[mask]
+
+
+def _apply_classifier_predictions(
+    classifier: Optional[Dict[str, Any]],
+    texts: List[str],
+    assignments: List[Dict[str, Any]],
+) -> None:
+    if classifier is None or not assignments or not texts:
+        return
+    kind = classifier.get("kind")
+    if kind not in {"sentence-transformer", "sentence-transformer-multitask"}:
+        return
+
+    embed_name = classifier.get("embedding_model_name", DEFAULT_CLASSIFIER_EMBED_MODEL)
+    normalize_embeddings = classifier.get("normalize_embeddings", True)
+    batch_size = int(classifier.get("inference_batch_size", 128))
+    embedder = _get_embedder(embed_name)
+    embeddings = embedder.encode(
+        texts,
+        batch_size=batch_size,
+        show_progress_bar=False,
+        normalize_embeddings=normalize_embeddings,
+    )
+
+    manual_topic_preds: List[str]
+    manual_subtopic_preds: List[str]
+
+    if kind == "sentence-transformer-multitask":
+        manual_topic_encoder = classifier.get("manual_topic_label_encoder")
+        manual_subtopic_encoder = classifier.get("manual_subtopic_label_encoder")
+        manual_topic_clf = classifier.get("manual_topic_clf")
+        manual_subtopic_clf = classifier.get("manual_subtopic_clf")
+        if (
+            manual_topic_encoder is None
+            or manual_subtopic_encoder is None
+            or manual_topic_clf is None
+            or manual_subtopic_clf is None
+        ):
+            return
+
+        manual_topic_preds = manual_topic_encoder.inverse_transform(manual_topic_clf.predict(embeddings))
+        manual_subtopic_preds = manual_subtopic_encoder.inverse_transform(manual_subtopic_clf.predict(embeddings))
+
+        for idx, assign in enumerate(assignments):
+            pred_topic = manual_topic_preds[idx] if idx < len(manual_topic_preds) else ""
+            if pred_topic and not _normalize_label(assign.get("manual_label_topic")):
+                assign["manual_label_topic"] = pred_topic
+
+            pred_subtopic = manual_subtopic_preds[idx] if idx < len(manual_subtopic_preds) else ""
+            if pred_subtopic and not _normalize_label(assign.get("manual_label_subtopic")):
+                assign["manual_label_subtopic"] = pred_subtopic
+
+    elif kind == "sentence-transformer":
+        manual_topic_encoder = classifier.get("topic_label_encoder")
+        manual_subtopic_encoder = classifier.get("subtopic_label_encoder")
+        manual_topic_clf = classifier.get("topic_clf")
+        manual_subtopic_clf = classifier.get("subtopic_clf")
+        if manual_topic_encoder is None or manual_subtopic_encoder is None:
+            return
+        manual_topic_preds = manual_topic_encoder.inverse_transform(manual_topic_clf.predict(embeddings))
+        manual_subtopic_preds = manual_subtopic_encoder.inverse_transform(manual_subtopic_clf.predict(embeddings))
+
+        for idx, assign in enumerate(assignments):
+            pred_topic = manual_topic_preds[idx] if idx < len(manual_topic_preds) else ""
+            if pred_topic and not _normalize_label(assign.get("manual_label_topic")):
+                assign["manual_label_topic"] = pred_topic
+
+            pred_subtopic = manual_subtopic_preds[idx] if idx < len(manual_subtopic_preds) else ""
+            if pred_subtopic and not _normalize_label(assign.get("manual_label_subtopic")):
+                assign["manual_label_subtopic"] = pred_subtopic
 
 def _derive_facts_posts_tableau(
     input_path: Path,
@@ -245,7 +499,12 @@ def main():
     ap.add_argument("--telegram", type=str, default="")
     ap.add_argument("--x", type=str, default="")
     ap.add_argument("--max_rows", type=int, default=0, help="0 = todos")
-    ap.add_argument("--device", type=int, default=None, help="GPU id (0) o CPU (-1)")
+    ap.add_argument(
+        "--device",
+        type=str,
+        default=None,
+        help="GPU id (0), CPU (-1), o MPS (-2 / mps) en Apple Silicon",
+    )
     ap.add_argument("--emotion_model", type=str, default="joeddav/xlm-roberta-large-xnli",
                     help="Modelo zero-shot para emociones")
     ap.add_argument("--entities", type=str, default="OTAN,Rusia",
@@ -255,6 +514,27 @@ def main():
     ap.add_argument("--entity_window", type=int, default=160,
                     help="Ventana en caracteres alrededor de la mención (contexto)")
     args = ap.parse_args()
+
+    raw_device = args.device
+    if raw_device is None:
+        coerced_device = None
+    else:
+        if isinstance(raw_device, str):
+            token = raw_device.strip().lower()
+            if token in {"", "none"}:
+                coerced_device = None
+            elif token in {"-1", "cpu"}:
+                coerced_device = -1
+            elif token in {"-2", "mps"}:
+                coerced_device = -2
+            else:
+                try:
+                    coerced_device = int(token)
+                except Exception as exc:
+                    raise ValueError(f"Valor de --device no reconocido: {raw_device}") from exc
+        else:
+            coerced_device = raw_device
+    args.device = coerced_device
 
     ensure_dirs(
         "data/processed",
@@ -328,18 +608,217 @@ def main():
         topic_mask = df_all[topic_text_col].astype(str).str.strip() != ""
         if topic_mask.any():
             topic_df = df_all[topic_mask].copy()
-            docs = topic_df[topic_text_col].astype(str).tolist()
-            ids = topic_df["item_id"].astype(str).tolist()
-            dts = topic_df["timestamp"].astype(str).tolist()
-            topic_out = fit_topics(
-                docs,
-                ids=ids,
-                cache_dir="models/bertopic/global",
-                min_topic_size=20,
-                n_gram_range=(1, 2),
-                seed=42,
-            )
-            topic_assignments = topic_out["assignments"]
+            lang_series = topic_df.get("lang", pd.Series([""] * len(topic_df), index=topic_df.index)).astype(str).str.strip().str.lower()
+
+            topic_classifier_bundle = _load_topic_classifier()
+
+            cyrillic_langs = {"ru", "uk", "bg", "be", "sr", "mk"}
+            western_core_langs = {"en", "pl", "de", "fr", "it", "es", "pt", "nl"}
+            western_scandi_langs = {"sv", "fi", "da", "no"}
+            western_baltic_langs = {"lv", "lt", "et"}
+            western_central_langs = {"cs", "sk", "hu", "ro", "tr"}
+
+            group_configs = [
+                {
+                    "name": "cyrillic",
+                    "mask": lang_series.isin(cyrillic_langs),
+                    "fit_kwargs": {
+                        "min_topic_size": 4,
+                        "umap_kwargs": {"n_neighbors": 45},
+                        "hdbscan_kwargs": {"min_cluster_size": 4, "min_samples": 1},
+                    },
+                },
+                {
+                    "name": "western_core",
+                    "mask": lang_series.isin(western_core_langs),
+                    "fit_kwargs": {
+                        "min_topic_size": 7,
+                        "umap_kwargs": {"n_neighbors": 32},
+                        "hdbscan_kwargs": {"min_cluster_size": 7, "min_samples": 1},
+                    },
+                },
+                {
+                    "name": "western_scandi",
+                    "mask": lang_series.isin(western_scandi_langs),
+                    "fit_kwargs": {
+                        "min_topic_size": 5,
+                        "umap_kwargs": {"n_neighbors": 38},
+                        "hdbscan_kwargs": {"min_cluster_size": 5, "min_samples": 1},
+                    },
+                },
+                {
+                    "name": "western_baltic",
+                    "mask": lang_series.isin(western_baltic_langs),
+                    "fit_kwargs": {
+                        "min_topic_size": 3,
+                        "umap_kwargs": {"n_neighbors": 36},
+                        "hdbscan_kwargs": {"min_cluster_size": 3, "min_samples": 1},
+                    },
+                },
+                {
+                    "name": "western_central",
+                    "mask": lang_series.isin(western_central_langs),
+                    "fit_kwargs": {
+                        "min_topic_size": 6,
+                        "umap_kwargs": {"n_neighbors": 35},
+                        "hdbscan_kwargs": {"min_cluster_size": 6, "min_samples": 1},
+                    },
+                },
+                {
+                    "name": "other",
+                    "mask": pd.Series([True] * len(topic_df), index=topic_df.index),
+                    "fit_kwargs": {
+                        "min_topic_size": 5,
+                        "umap_kwargs": {"n_neighbors": 35},
+                        "hdbscan_kwargs": {"min_cluster_size": 5, "min_samples": 1},
+                    },
+                },
+            ]
+
+            topic_assignments: List[Dict[str, object]] = []
+            summary_frames: List[pd.DataFrame] = []
+            topics_tables: List[pd.DataFrame] = []
+            global_topic_counter = 0
+            used_mask = pd.Series([False] * len(topic_df), index=topic_df.index)
+
+            group_summaries: List[str] = []
+            group_metrics: List[Dict[str, object]] = []
+
+            for group_cfg in group_configs:
+                group_name = group_cfg["name"]
+                group_mask = group_cfg["mask"] & ~used_mask
+                if not group_mask.any():
+                    continue
+                used_mask |= group_mask
+                group_df = topic_df[group_mask].copy()
+
+                docs = group_df[topic_text_col].astype(str).tolist()
+                ids = group_df["item_id"].astype(str).tolist()
+                dts = group_df["timestamp"].astype(str).tolist()
+                lang_codes = group_df["lang"].astype(str).tolist() if "lang" in group_df.columns else None
+                docs_clean = group_df["text_clean"].astype(str).tolist() if "text_clean" in group_df.columns else docs
+
+                cache_dir = (Path("models") / "bertopic" / f"group_{group_name}").as_posix()
+
+                print(f"▶ BERTopic grupo {group_name} ({len(docs)} documentos)")
+
+                topic_out = fit_topics(
+                    docs,
+                    ids=ids,
+                    cache_dir=cache_dir,
+                    min_topic_size=group_cfg["fit_kwargs"]["min_topic_size"],
+                    n_gram_range=(1, 2),
+                    seed=42,
+                    lang_codes=lang_codes,
+                    apply_reduce_outliers=group_cfg.get("apply_reduce_outliers", False),
+                    reduce_outliers_kwargs=group_cfg.get("reduce_outliers_kwargs"),
+                    umap_kwargs=group_cfg["fit_kwargs"].get("umap_kwargs"),
+                    hdbscan_kwargs=group_cfg["fit_kwargs"].get("hdbscan_kwargs"),
+                )
+
+                assignments = topic_out["assignments"]
+                _apply_classifier_predictions(topic_classifier_bundle, docs_clean, assignments)
+
+                summary = summarize_topics(
+                    topic_out["model"],
+                    docs,
+                    ids,
+                    dts,
+                    assignments=assignments,
+                )
+
+                mapping: Dict[int, int] = {}
+                for original_tid in sorted({a["topic_id"] for a in assignments if int(a["topic_id"]) >= 0}):
+                    mapping[int(original_tid)] = global_topic_counter
+                    global_topic_counter += 1
+
+                for assign in assignments:
+                    original_tid = int(assign["topic_id"])
+                    assign["topic_id_original"] = original_tid
+                    assign["lang_group"] = group_name
+                    if original_tid >= 0:
+                        assign["topic_id"] = mapping.get(original_tid, original_tid)
+
+                if "topic_id" in summary.columns:
+                    summary["topic_id_original"] = summary["topic_id"].astype(int)
+                    summary["topic_id"] = summary["topic_id"].astype(int).map(lambda tid: mapping.get(tid, tid))
+                else:
+                    summary["topic_id_original"] = -1
+                summary["lang_group"] = group_name
+
+                topic_assignments.extend(assignments)
+                summary_frames.append(summary)
+
+                topics_table_group = topic_out.get("model_info", {}).get("topics_table")
+                if topics_table_group is not None:
+                    topics_table_group = topics_table_group.copy()
+                    if "Topic" in topics_table_group.columns:
+                        topics_table_group["Topic_original"] = topics_table_group["Topic"].astype(int)
+                        topics_table_group["Topic"] = topics_table_group["Topic"].astype(int).map(
+                            lambda tid: mapping.get(tid, tid)
+                        )
+                    topics_table_group["lang_group"] = group_name
+                    topics_tables.append(topics_table_group)
+
+                model_info = topic_out.get("model_info", {})
+                n_outliers = model_info.get("n_outliers", "n/a")
+                n_docs = model_info.get("n_documents", len(docs))
+                group_summaries.append(
+                    f"{group_name}: docs={n_docs}, outliers={n_outliers}"
+                )
+                group_metrics.append({
+                    "lang_group": group_name,
+                    "n_documents": n_docs,
+                    "n_outliers": n_outliers,
+                    "outlier_ratio": model_info.get("outlier_ratio"),
+                    "n_topics": model_info.get("n_topics"),
+                })
+
+            if group_summaries:
+                print("ⓘ Resumen por grupo -> " + "; ".join(group_summaries))
+            if group_metrics:
+                metrics_df = pd.DataFrame(group_metrics)
+                export_tableau_csv(metrics_df, "results/topics/topic_group_metrics.csv")
+
+            # Reordenar tópicos globalmente por volumen para evitar bloques por idioma
+            new_topic_id_map: Dict[int, int] = {}
+            if topics_tables:
+                combined_table_preview = pd.concat(topics_tables, ignore_index=True)
+                positive_table = combined_table_preview[combined_table_preview["Topic"] >= 0].copy()
+                if not positive_table.empty:
+                    positive_table = (
+                        positive_table[["Topic", "Count"]]
+                        .groupby("Topic", as_index=False)["Count"]
+                        .max()
+                        .sort_values(["Count", "Topic"], ascending=[False, True])
+                    )
+                    new_topic_id_map = {
+                        int(row.Topic): idx for idx, row in enumerate(positive_table.itertuples(index=False))
+                    }
+
+            if new_topic_id_map:
+                for assign in topic_assignments:
+                    tid = int(assign.get("topic_id", -1))
+                    if tid >= 0 and tid in new_topic_id_map:
+                        assign["topic_id"] = new_topic_id_map[tid]
+                for summary in summary_frames:
+                    if "topic_id" in summary.columns:
+                        topic_vals = pd.to_numeric(summary["topic_id"], errors="coerce")
+                        mask = topic_vals.notna() & (topic_vals.astype(int) >= 0)
+                        if mask.any():
+                            current_ids = topic_vals.loc[mask].astype(int)
+                            mapped_ids = current_ids.map(new_topic_id_map)
+                            mapped_ids = mapped_ids.fillna(current_ids)
+                            summary.loc[mask, "topic_id"] = mapped_ids.astype(int)
+                for table in topics_tables:
+                    topic_vals = pd.to_numeric(table["Topic"], errors="coerce")
+                    mask = topic_vals.notna() & (topic_vals.astype(int) >= 0)
+                    if mask.any():
+                        current_ids = topic_vals.loc[mask].astype(int)
+                        mapped_ids = current_ids.map(new_topic_id_map)
+                        mapped_ids = mapped_ids.fillna(current_ids)
+                        table.loc[mask, "Topic"] = mapped_ids.astype(int)
+
             uid_to_topic = {a["uid"]: a for a in topic_assignments}
 
             df_all["topic_id"] = df_all["item_id"].astype(str).map(
@@ -360,47 +839,86 @@ def main():
                 columns={"uid": "item_id", "label": "topic_label", "score": "topic_score", "terms": "topic_terms"}
             )
 
-            summary_df = summarize_topics(
-                topic_out["model"],
-                docs,
-                ids,
-                dts,
-                assignments=topic_assignments,
-            )
+            summary_df = pd.concat(summary_frames, ignore_index=True) if summary_frames else pd.DataFrame()
+            topics_table = pd.concat(topics_tables, ignore_index=True) if topics_tables else pd.DataFrame()
+            if not topics_table.empty and "Count" in topics_table.columns:
+                topics_table = topics_table.sort_values(["Count", "Topic"], ascending=[False, True]).reset_index(drop=True)
 
             manual_topics = _load_manual_topic_labels()
             manual_topic_map = {}
             manual_subtopic_map = {}
+            manual_hierarchy_map: Dict[str, str] = {}
             if not manual_topics.empty:
                 manual_topic_map = manual_topics.set_index("topic_id")["manual_label_topic"].to_dict()
                 manual_subtopic_map = manual_topics.set_index("topic_id")["manual_label_subtopic"].to_dict()
+                manual_hierarchy_map = _build_subtopic_parent_map(
+                    manual_topics,
+                    "manual_label_topic",
+                    "manual_label_subtopic",
+                )
 
             summary_df["topic_id_str"] = summary_df.get("topic_id", pd.NA).astype(str)
             summary_df["manual_label_topic"] = summary_df["topic_id_str"].map(manual_topic_map).fillna("")
             summary_df["manual_label_subtopic"] = summary_df["topic_id_str"].map(manual_subtopic_map).fillna("")
+            _enforce_subtopic_hierarchy(summary_df, "manual_label_topic", "manual_label_subtopic", manual_hierarchy_map)
 
-            topic_classifier = _load_topic_classifier()
-            if topic_classifier is not None and not summary_df.empty:
-                term_source = None
+            if topic_classifier_bundle is None:
+                topic_classifier_bundle = _load_topic_classifier()
+            if (
+                topic_classifier_bundle is not None
+                and topic_classifier_bundle.get("kind") == "sentence-transformer"
+                and not summary_df.empty
+            ):
                 if "top_terms" in summary_df.columns:
                     term_source = summary_df["top_terms"].apply(_topic_terms_to_text)
                 elif "topic_terms" in summary_df.columns:
                     term_source = summary_df["topic_terms"].apply(_topic_terms_to_text)
                 else:
                     term_source = pd.Series([""] * len(summary_df), index=summary_df.index)
+                term_source = term_source.fillna("").astype(str)
 
-                vectorizer = topic_classifier["vectorizer"]
-                topic_clf = topic_classifier["topic_clf"]
-                subtopic_clf = topic_classifier["subtopic_clf"]
-                X_features = vectorizer.transform(term_source.tolist())
-                topic_preds = pd.Series(topic_clf.predict(X_features), index=summary_df.index)
-                subtopic_preds = pd.Series(subtopic_clf.predict(X_features), index=summary_df.index)
+                topic_clf = topic_classifier_bundle["topic_clf"]
+                subtopic_clf = topic_classifier_bundle["subtopic_clf"]
+
+                if topic_classifier_bundle.get("kind") == "sentence-transformer":
+                    embed_name = topic_classifier_bundle.get("embedding_model_name", DEFAULT_CLASSIFIER_EMBED_MODEL)
+                    normalize_embeddings = topic_classifier_bundle.get("normalize_embeddings", True)
+                    batch_size = int(topic_classifier_bundle.get("inference_batch_size", 128))
+                    embedder = _get_embedder(embed_name)
+                    embeddings = embedder.encode(
+                        term_source.tolist(),
+                        batch_size=batch_size,
+                        show_progress_bar=False,
+                        normalize_embeddings=normalize_embeddings,
+                    )
+                    topic_encoder = topic_classifier_bundle["topic_label_encoder"]
+                    subtopic_encoder = topic_classifier_bundle["subtopic_label_encoder"]
+                    topic_preds = pd.Series(
+                        topic_encoder.inverse_transform(topic_clf.predict(embeddings)),
+                        index=summary_df.index,
+                    )
+                    subtopic_preds = pd.Series(
+                        subtopic_encoder.inverse_transform(subtopic_clf.predict(embeddings)),
+                        index=summary_df.index,
+                    )
+                else:
+                    vectorizer = topic_classifier_bundle.get("vectorizer")
+                    if vectorizer is None:
+                        topic_preds = pd.Series(["" for _ in range(len(summary_df))], index=summary_df.index)
+                        subtopic_preds = pd.Series(["" for _ in range(len(summary_df))], index=summary_df.index)
+                    else:
+                        X_features = vectorizer.transform(term_source.tolist())
+                        topic_preds = pd.Series(topic_clf.predict(X_features), index=summary_df.index)
+                        subtopic_preds = pd.Series(subtopic_clf.predict(X_features), index=summary_df.index)
 
                 mask_topic_missing = summary_df["manual_label_topic"].astype(str).str.strip() == ""
                 summary_df.loc[mask_topic_missing, "manual_label_topic"] = topic_preds[mask_topic_missing]
 
                 mask_subtopic_missing = summary_df["manual_label_subtopic"].astype(str).str.strip() == ""
                 summary_df.loc[mask_subtopic_missing, "manual_label_subtopic"] = subtopic_preds[mask_subtopic_missing]
+
+            hierarchy_map = _build_subtopic_parent_map(summary_df, "manual_label_topic", "manual_label_subtopic")
+            _enforce_subtopic_hierarchy(summary_df, "manual_label_topic", "manual_label_subtopic", hierarchy_map)
 
             final_topic_map = summary_df.set_index("topic_id_str")["manual_label_topic"].to_dict()
             final_subtopic_map = summary_df.set_index("topic_id_str")["manual_label_subtopic"].to_dict()
@@ -412,38 +930,59 @@ def main():
                 assignments_df["manual_label_subtopic"] = (
                     assignments_df["topic_id"].astype(str).map(final_subtopic_map).fillna("")
                 )
+                _enforce_subtopic_hierarchy(assignments_df, "manual_label_topic", "manual_label_subtopic", hierarchy_map)
+
+                required_topic_cols = {"Count", "manual_label_topic", "manual_label_subtopic", "top_terms"}
+                for col in required_topic_cols:
+                    if col not in topics_table.columns:
+                        topics_table[col] = pd.NA
+
+                topics_counts = assignments_df.groupby("topic_id", as_index=False).agg(
+                    Count=("item_id", "count"),
+                    manual_label_topic=("manual_label_topic", _majority_label),
+                    manual_label_subtopic=("manual_label_subtopic", _majority_label),
+                    topic_terms=("topic_terms", _first_non_empty),
+                )
+
+                if not topics_table.empty and "Topic" in topics_table.columns:
+                    topics_table["Topic"] = pd.to_numeric(topics_table["Topic"], errors="coerce")
+                    topics_table = topics_table.dropna(subset=["Topic"])
+                    topics_table["Topic"] = topics_table["Topic"].astype(int)
+                    topics_table = topics_table.drop_duplicates("Topic", keep="first").set_index("Topic")
+                else:
+                    topics_table = pd.DataFrame().set_index(pd.Index([], name="Topic"))
+
+                for _, row in topics_counts.iterrows():
+                    tid = int(row["topic_id"])
+                    if tid not in topics_table.index:
+                        topics_table.loc[tid, "Count"] = 0
+                    topics_table.at[tid, "Count"] = row["Count"]
+                    topics_table.at[tid, "manual_label_topic"] = row["manual_label_topic"]
+                    topics_table.at[tid, "manual_label_subtopic"] = row["manual_label_subtopic"]
+                    topic_terms_value = _serialize_terms(row["topic_terms"])
+                    topics_table.at[tid, "top_terms"] = topic_terms_value
+
+                topics_table = topics_table.reset_index()
+                topics_table = topics_table.sort_values(["Count", "Topic"], ascending=[False, True]).reset_index(drop=True)
 
             if "topic_terms" in assignments_df.columns:
-                assignments_df["topic_terms"] = assignments_df["topic_terms"].apply(
-                    lambda terms: json.dumps(terms, ensure_ascii=False) if isinstance(terms, list)
-                    else ("[]" if terms in (None, "") else str(terms))
-                )
+                assignments_df["topic_terms"] = assignments_df["topic_terms"].apply(_serialize_terms)
             export_tableau_csv(assignments_df, "data/processed/topics_assignments.csv")
 
             if "top_terms" in summary_df.columns:
-                summary_df["top_terms"] = summary_df["top_terms"].apply(
-                    lambda terms: json.dumps(terms, ensure_ascii=False) if isinstance(terms, list)
-                    else ("[]" if terms in (None, "") else str(terms))
-                )
+                summary_df["top_terms"] = summary_df["top_terms"].apply(_serialize_terms)
             summary_df = summary_df.drop(columns=["topic_id_str"])
             export_tableau_csv(summary_df, "data/processed/topics_summary_daily.csv")
 
-            topics_table = topic_out["model_info"]["topics_table"]
             if "TopTerms" in topics_table.columns:
                 topics_table = topics_table.rename(columns={"TopTerms": "top_terms"})
             if "topic_terms" in topics_table.columns:
                 topics_table = topics_table.rename(columns={"topic_terms": "top_terms"})
-            if "TopTerms" in topics_table.columns:
-                topics_table["TopTerms"] = topics_table["TopTerms"].apply(
-                    lambda terms: json.dumps(terms, ensure_ascii=False) if isinstance(terms, list)
-                    else ("[]" if terms in (None, "") else str(terms))
-                )
-                topics_table = topics_table.rename(columns={"TopTerms": "top_terms"})
-            if "top_terms" in topics_table.columns:
-                topics_table["top_terms"] = topics_table["top_terms"].apply(
-                    lambda terms: json.dumps(terms, ensure_ascii=False) if isinstance(terms, list)
-                    else ("[]" if terms in (None, "") else str(terms))
-                )
+            if "Representation" in topics_table.columns:
+                topics_table["top_terms"] = topics_table["Representation"]
+            elif "top_terms" in topics_table.columns:
+                topics_table["top_terms"] = topics_table["top_terms"].apply(_serialize_terms)
+
             topic_id_col = None
             for candidate in ["Topic", "topic_id"]:
                 if candidate in topics_table.columns:
@@ -456,6 +995,22 @@ def main():
                 topics_table["manual_label_subtopic"] = (
                     topics_table[topic_id_col].astype(str).map(final_subtopic_map).fillna("")
                 )
+                _enforce_subtopic_hierarchy(topics_table, "manual_label_topic", "manual_label_subtopic", hierarchy_map)
+            if "Count" in topics_table.columns:
+                topics_table["Count"] = pd.to_numeric(topics_table["Count"], errors="coerce").fillna(0).astype(int)
+            topics_table = topics_table.loc[:, ~topics_table.columns.duplicated()]
+            preferred_cols = [
+                "Topic",
+                "topic_id",
+                "Count",
+                "Name",
+                "Representation",
+                "top_terms",
+                "manual_label_topic",
+                "manual_label_subtopic",
+            ]
+            ordered = [col for col in preferred_cols if col in topics_table.columns]
+            topics_table = topics_table[ordered + [col for col in topics_table.columns if col not in ordered]]
             export_tableau_csv(topics_table, "results/topics/topic_info.csv")
 
             df_all["topic_id_str"] = df_all["topic_id"].astype(str)
@@ -463,6 +1018,7 @@ def main():
             df_all["manual_label_subtopic"] = df_all["topic_id_str"].map(final_subtopic_map).fillna("")
             mask_topic_override = df_all["manual_label_topic"].astype(str).str.strip() != ""
             df_all.loc[mask_topic_override, "topic_label"] = df_all.loc[mask_topic_override, "manual_label_topic"]
+            _enforce_subtopic_hierarchy(df_all, "manual_label_topic", "manual_label_subtopic", hierarchy_map)
             df_all = df_all.drop(columns=["topic_id_str"])
         else:
             df_all["topic_id"] = pd.NA
@@ -699,3 +1255,224 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# === Finalize manual and classifier labels on processed CSVs ===
+
+import atexit
+
+def _normalize_topic_id_value(v):
+    try:
+        import pandas as _pd
+    except Exception:
+        # Minimal normalization w/o pandas
+        if v is None:
+            return ""
+        s = str(v).strip()
+        try:
+            f = float(s)
+            i = int(f)
+            return str(i) if f == float(i) else s
+        except Exception:
+            return s
+    if _pd.isna(v):
+        return ""
+    s = str(v).strip()
+    try:
+        f = float(s)
+        i = int(f)
+        return str(i) if f == float(i) else s
+    except Exception:
+        return s
+
+def _load_manual_label_table():
+    import pandas as pd
+    p = Path("data") / "ground_truth" / "topics_manual_labels.csv"
+    if not p.exists():
+        print("ⓘ Ground truth topics_manual_labels.csv not found; skipping manual merge.")
+        return pd.DataFrame()
+    df = pd.read_csv(p, sep=";", encoding="utf-8-sig", low_memory=False)
+    df.columns = [c.lower() for c in df.columns]
+    for col in ("topic_id","manual_label_topic","manual_label_subtopic"):
+        if col not in df.columns:
+            print("ⓘ Ground truth missing columns; skipping manual merge.")
+            return pd.DataFrame()
+    df["topic_id_norm"] = df["topic_id"].apply(_normalize_topic_id_value)
+    return df[["topic_id_norm","manual_label_topic","manual_label_subtopic"]].drop_duplicates()
+
+def _load_classifier_bundle():
+    p = Path("models") / "topic_classifier" / "topic_classifier.joblib"
+    if not p.exists():
+        return None
+    try:
+        import joblib  # type: ignore
+        bundle = joblib.load(p)
+        return bundle
+    except Exception as e:
+        print(f"ⓘ Could not load topic classifier: {e}")
+        return None
+
+def _predict_manual_labels(bundle, texts_series):
+    kind = bundle.get("kind")
+    model_name = bundle.get("embedding_model_name")
+    if not model_name:
+        raise RuntimeError("Classifier bundle missing 'embedding_model_name'.")
+    try:
+        from sentence_transformers import SentenceTransformer  # type: ignore
+    except Exception as e:
+        raise RuntimeError(f"sentence-transformers unavailable: {e}")
+    embedder = SentenceTransformer(model_name)
+    texts = texts_series.fillna("").astype(str).tolist()
+    embs = embedder.encode(texts, show_progress_bar=False, normalize_embeddings=True)
+    import numpy as np
+    X = np.array(embs)
+
+    if kind == "sentence-transformer":
+        topic_clf = bundle["topic_clf"]
+        sub_clf = bundle["subtopic_clf"]
+        le_topic = bundle["topic_label_encoder"]
+        le_sub = bundle["subtopic_label_encoder"]
+        t_idx = topic_clf.predict(X)
+        s_idx = sub_clf.predict(X)
+        import pandas as pd
+        t = pd.Series(le_topic.inverse_transform(t_idx), index=texts_series.index)
+        s = pd.Series(le_sub.inverse_transform(s_idx), index=texts_series.index)
+        return t, s
+    elif kind == "sentence-transformer-multitask":
+        manual_topic_clf = bundle["manual_topic_clf"]
+        manual_subtopic_clf = bundle["manual_subtopic_clf"]
+        manual_topic_encoder = bundle["manual_topic_label_encoder"]
+        manual_subtopic_encoder = bundle["manual_subtopic_label_encoder"]
+        t_idx = manual_topic_clf.predict(X)
+        s_idx = manual_subtopic_clf.predict(X)
+        import pandas as pd
+        t = pd.Series(manual_topic_encoder.inverse_transform(t_idx), index=texts_series.index)
+        s = pd.Series(manual_subtopic_encoder.inverse_transform(s_idx), index=texts_series.index)
+        return t, s
+    else:
+        raise RuntimeError(f"Unknown classifier kind: {kind}")
+
+def _export_with_bom(df, path_str):
+    # Use project export helper if available to keep ; and utf-8-sig
+    try:
+        export_tableau_csv(df, path_str)  # from src.utils
+    except Exception:
+        import pandas as pd
+        Path(path_str).parent.mkdir(parents=True, exist_ok=True)
+        df.to_csv(path_str, sep=";", encoding="utf-8-sig", index=False)
+
+def _apply_labels_to_dataframe(df, name, manuals, bundle):
+    import pandas as pd
+    if df is None or df.empty:
+        return df
+
+    cols = {c.lower(): c for c in df.columns}
+    topic_col = cols.get("topic_id")
+    if not topic_col:
+        return df
+
+    if topic_col != "topic_id":
+        df = df.rename(columns={topic_col: "topic_id"})
+
+    manual_topic_col = cols.get("manual_label_topic")
+    if manual_topic_col and manual_topic_col != "manual_label_topic":
+        df = df.rename(columns={manual_topic_col: "manual_label_topic"})
+    manual_subtopic_col = cols.get("manual_label_subtopic")
+    if manual_subtopic_col and manual_subtopic_col != "manual_label_subtopic":
+        df = df.rename(columns={manual_subtopic_col: "manual_label_subtopic"})
+
+    if "manual_label_topic" not in df.columns:
+        df["manual_label_topic"] = pd.NA
+    if "manual_label_subtopic" not in df.columns:
+        df["manual_label_subtopic"] = pd.NA
+
+    df["topic_id_norm"] = df["topic_id"].apply(_normalize_topic_id_value)
+
+    before_t = df["manual_label_topic"].notna().sum()
+    before_s = df["manual_label_subtopic"].notna().sum()
+
+    if manuals is not None and not manuals.empty:
+        df = df.merge(manuals, on="topic_id_norm", how="left", suffixes=("", "_manual_ref"))
+        for col in ("manual_label_topic", "manual_label_subtopic"):
+            ref = f"{col}_manual_ref"
+            if ref in df.columns:
+                df[col] = df[col].where(df[col].notna() & (df[col].astype(str).str.strip() != ""), df[ref])
+                df.drop(columns=[ref], inplace=True, errors="ignore")
+
+    text_col = cols.get("text") or cols.get("text_clean")
+    if bundle is not None and (text_col or "text" in df.columns):
+        working_text_col = "text"
+        if text_col and text_col != "text" and text_col in df.columns:
+            df = df.rename(columns={text_col: working_text_col})
+        if working_text_col in df.columns:
+            try:
+                mask = df["manual_label_topic"].isna() | (df["manual_label_topic"].astype(str).str.strip() == "")
+                if mask.any():
+                    t_pred, s_pred = _predict_manual_labels(bundle, df.loc[mask, working_text_col])
+                    df.loc[mask, "manual_label_topic"] = df.loc[mask, "manual_label_topic"].fillna(t_pred)
+                    df.loc[mask, "manual_label_subtopic"] = df.loc[mask, "manual_label_subtopic"].fillna(s_pred)
+            except Exception as e:
+                print(f"ⓘ Classifier skipped for {name}: {e}")
+        if text_col and text_col != "text":
+            df = df.rename(columns={working_text_col: text_col})
+
+    after_t = df["manual_label_topic"].notna().sum()
+    after_s = df["manual_label_subtopic"].notna().sum()
+    df.drop(columns=["topic_id_norm"], inplace=True, errors="ignore")
+
+    if topic_col and topic_col != "topic_id":
+        df = df.rename(columns={"topic_id": topic_col})
+    if manual_topic_col and manual_topic_col != "manual_label_topic":
+        df = df.rename(columns={"manual_label_topic": manual_topic_col})
+    if manual_subtopic_col and manual_subtopic_col != "manual_label_subtopic":
+        df = df.rename(columns={"manual_label_subtopic": manual_subtopic_col})
+
+    print(f"✔ {name}: topics {before_t}→{after_t} / subtopics {before_s}→{after_s}")
+    return df
+
+def _finalize_processed_topic_labels():
+    import pandas as pd
+    processed = Path("data") / "processed"
+    if not processed.exists():
+        return
+
+    manuals = _load_manual_label_table()
+    bundle = _load_classifier_bundle()
+
+    # Fixed set we know about + autodiscovery
+    candidates = [
+        "facts_posts.csv",
+        "facts_posts_tableau.csv",
+        "all_platforms.csv",
+        "entity_mentions.csv",
+        "entity_topic_summary.csv",
+    ]
+    # Add any other csvs with topic_id
+    for p in processed.glob("*.csv"):
+        if p.name not in candidates:
+            try:
+                df_probe = pd.read_csv(p, sep=";", encoding="utf-8-sig", nrows=5, low_memory=False)
+            except Exception:
+                try:
+                    df_probe = pd.read_csv(p, sep=",", encoding="utf-8", nrows=5, low_memory=False)
+                except Exception:
+                    continue
+            if "topic_id" in [c.lower() for c in df_probe.columns]:
+                candidates.append(p.name)
+
+    for name in sorted(set(candidates)):
+        p = processed / name
+        if not p.exists():
+            continue
+        try:
+            try:
+                df = pd.read_csv(p, sep=";", encoding="utf-8-sig", low_memory=False)
+            except Exception:
+                df = pd.read_csv(p, sep=",", encoding="utf-8", low_memory=False)
+            df2 = _apply_labels_to_dataframe(df, name, manuals, bundle)
+            _export_with_bom(df2, str(p))
+        except Exception as e:
+            print(f"ⓘ Skipped {name}: {e}")
+
+# Register finalize step to run after the script completes its normal pipeline
+atexit.register(_finalize_processed_topic_labels)

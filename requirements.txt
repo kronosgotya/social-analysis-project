@@ -17,3 +17,5 @@ hdbscan
 umap-learn
 stopwordsiso>=0.6
 simplemma>=0.9
+langdetect>=1.0.9
+pyyaml>=6.0

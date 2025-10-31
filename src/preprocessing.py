@@ -11,12 +11,23 @@ Preprocesamiento para Telegram y X (fecha simple):
 
 from __future__ import annotations
 import re
+import json
 import hashlib
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional, Tuple
+import csv
 import pandas as pd
 from stopwordsiso import stopwords as stopwords_iso
 from simplemma import simple_tokenizer, lemmatize
+
+try:  # langdetect es opcional; lo usamos si está disponible
+    from langdetect import detect_langs, DetectorFactory, LangDetectException  # type: ignore
+    DetectorFactory.seed = 42
+    _LANGDETECT_AVAILABLE = True
+except Exception:  # pragma: no cover - fallback cuando no está instalado
+    detect_langs = None  # type: ignore
+    LangDetectException = Exception  # type: ignore
+    _LANGDETECT_AVAILABLE = False
 
 _LANG_FALLBACK = {
     "en": "en",
@@ -52,13 +63,31 @@ _LANG_FALLBACK = {
 
 _GLOBAL_STOPWORDS: Dict[str, set] = {}
 _DEFAULT_LANG = "en"
+_LANG_UNKNOWN = "und"
 _TOKEN_MIN_LENGTH = 3
 _TOPIC_STOPWORDS_EXTRA = {"https", "http", "amp", "rt", "t.me"}
+_LANG_MISSING_TOKENS = {
+    "",
+    "und",
+    "unk",
+    "unknown",
+    "none",
+    "null",
+    "nan",
+    "n/a",
+    "na",
+    "?",
+    "??",
+}
+_LANGDETECT_MIN_LENGTH = 20
+_LANGDETECT_MAX_CHARS = 1000
 
 _LANG_COUNTRY_LOOKUP_CACHE: Optional[Dict[str, List[Dict[str, float]]]] = None
 _LANG_COUNTRY_LOOKUP_PATH = (
     Path(__file__).resolve().parent.parent / "data" / "raw" / "lang_country_lookup.csv"
 )
+_HANDLE_ALLOWED_RE = re.compile(r"^[A-Za-z0-9_]{1,30}$")
+_HANDLE_URL_RE = re.compile(r"(?:twitter|x)\.com/([^/\s]+)/", flags=re.IGNORECASE)
 
 def _normalize_lang_code(lang: Optional[str]) -> str:
     if not isinstance(lang, str) or not lang.strip():
@@ -173,6 +202,83 @@ def _parse_geolocation_tokens(value: str) -> List[str]:
     return [value]
 
 
+def _extract_handle_candidate(value: object) -> str:
+    """
+    Devuelve un posible handle (sin '@') si cumple el patrón estándar.
+    """
+    if isinstance(value, str):
+        token = value.strip()
+        if not token:
+            return ""
+        if token.startswith("@"):
+            token = token[1:]
+        if _HANDLE_ALLOWED_RE.match(token):
+            return token
+        match = _HANDLE_URL_RE.search(token)
+        if match:
+            candidate = match.group(1).strip("@")
+            if _HANDLE_ALLOWED_RE.match(candidate):
+                return candidate
+    return ""
+
+
+def _extract_handle_from_url(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+    token = value.strip()
+    if not token:
+        return ""
+    match = _HANDLE_URL_RE.search(token)
+    if not match:
+        return ""
+    candidate = match.group(1).split("?")[0].split("#")[0].strip("@")
+    return candidate if _HANDLE_ALLOWED_RE.match(candidate) else ""
+
+
+def _parse_mentions_field(value: object) -> Tuple[List[str], List[str]]:
+    """
+    Devuelve dos listas: handles con arroba y sin arroba.
+    """
+    with_prefix: List[str] = []
+    plain: List[str] = []
+
+    if value is None:
+        return with_prefix, plain
+
+    tokens: List[str]
+    if isinstance(value, list):
+        tokens = [str(item) for item in value]
+    else:
+        text = str(value).strip()
+        if not text:
+            return with_prefix, plain
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                tokens = [str(item) for item in parsed]
+            else:
+                tokens = [text]
+        except Exception:
+            tokens = [tok for tok in re.split(r"[;\s,|]+", text) if tok]
+
+    for raw in tokens:
+        candidate = str(raw).strip()
+        if not candidate:
+            continue
+        if candidate.startswith("@"):
+            bare = candidate[1:].strip()
+        else:
+            bare = candidate.strip("@")
+            candidate = f"@{bare}" if bare else ""
+        if not bare or not _HANDLE_ALLOWED_RE.match(bare):
+            continue
+        if candidate and candidate not in with_prefix:
+            with_prefix.append(candidate)
+        if bare not in plain:
+            plain.append(bare)
+    return with_prefix, plain
+
+
 def _geo_country_distribution(geo_value: str, lang_value: str) -> List[Dict[str, object]]:
     tokens = _parse_geolocation_tokens(geo_value)
     if tokens:
@@ -239,6 +345,32 @@ def _read_csv_utf8(path: str) -> pd.DataFrame:
         on_bad_lines="skip",
     )
 
+
+def _read_telegram_csv(path: str) -> pd.DataFrame:
+    """Robust reader for Telegram exports with embedded newlines/semicolons."""
+
+    try:
+        with open(path, "r", encoding="utf-8-sig", newline="") as handle:
+            reader = csv.reader(handle, delimiter=";", quotechar="\"", doublequote=True)
+            rows = list(reader)
+        if not rows:
+            return pd.DataFrame()
+        header = rows[0]
+        width = len(header)
+        data: List[List[str]] = []
+        for row in rows[1:]:
+            if not row:
+                continue
+            if len(row) < width:
+                row = row + [""] * (width - len(row))
+            elif len(row) > width:
+                row = row[:width]
+            data.append(row)
+        df = pd.DataFrame(data, columns=header)
+        return df
+    except Exception:
+        return _read_csv_utf8(path)
+
 # =========================
 # Helpers
 # =========================
@@ -246,6 +378,69 @@ def normalize_whitespace(text: str) -> str:
     if not isinstance(text, str):
         return text
     return re.sub(r"\s+", " ", text).strip()
+
+
+def _clean_lang_token(value: object) -> str:
+    if isinstance(value, str):
+        token = value.strip().lower()
+        if not token:
+            return ""
+        token = token.replace("_", "-")
+        token = re.split(r"[;,|]", token)[0].strip()
+        if "/" in token:
+            token = token.split("/")[0].strip()
+        if token in _LANG_MISSING_TOKENS:
+            return ""
+        return token
+    return ""
+
+
+def _detect_language_candidate(text: object) -> str:
+    if not _LANGDETECT_AVAILABLE:
+        return ""
+    if not isinstance(text, str):
+        return ""
+    sample = normalize_whitespace(text)
+    if len(sample) < _LANGDETECT_MIN_LENGTH:
+        return ""
+    sample = sample[:_LANGDETECT_MAX_CHARS]
+    try:
+        guesses = detect_langs(sample)  # type: ignore[operator]
+    except LangDetectException:  # type: ignore
+        return ""
+    except Exception:
+        return ""
+    if not guesses:
+        return ""
+    best = max(guesses, key=lambda cand: getattr(cand, "prob", 0.0))
+    prob = getattr(best, "prob", 0.0)
+    if prob < 0.6:
+        return ""
+    lang_code = getattr(best, "lang", "")
+    if not isinstance(lang_code, str):
+        return ""
+    return lang_code.strip().lower()
+
+
+def _enrich_language_series(texts: pd.Series, langs: pd.Series) -> pd.Series:
+    texts_series = texts.fillna("").astype(str)
+    lang_series = langs.fillna("").apply(_clean_lang_token).astype(str)
+    detect_mask = lang_series.isin(_LANG_MISSING_TOKENS) | (lang_series == "")
+    if detect_mask.any():
+        if _LANGDETECT_AVAILABLE:
+            detected = texts_series.loc[detect_mask].apply(_detect_language_candidate)
+            for idx, detected_lang in detected.items():
+                if isinstance(detected_lang, str) and detected_lang.strip():
+                    lang_series.loc[idx] = detected_lang.strip().lower()
+    normalized_values: List[str] = []
+    for raw in lang_series:
+        token = str(raw or "").strip().lower()
+        if not token:
+            normalized_values.append(_LANG_UNKNOWN)
+            continue
+        normalized_values.append(_normalize_lang_code(token) or _LANG_UNKNOWN)
+    return pd.Series(normalized_values, index=langs.index, dtype="object")
+
 
 def extract_emojis(text: str) -> List[str]:
     try:
@@ -327,7 +522,12 @@ def load_telegram(path: str) -> pd.DataFrame:
     - Detecta alias comunes (timestamp, texto, métricas) para tolerar cambios de esquema.
     - Normaliza fecha a YYYY-MM-DD y añade columnas vacías si faltan.
     """
-    df = _read_csv_utf8(path).copy()
+    df = _read_telegram_csv(path).copy()
+    if df.empty:
+        return pd.DataFrame()
+
+    mask = df.apply(lambda row: any(str(val).strip() for val in row), axis=1)
+    df = df.loc[mask].reset_index(drop=True)
 
     timestamp_aliases = ["timestamp", "date", "datetime", "created_at", "dt"]
     channel_aliases = ["channel", "channel_name", "chat", "chat_name", "author", "from"]
@@ -384,16 +584,13 @@ def load_telegram(path: str) -> pd.DataFrame:
     caption_series = _as_str(c_caption)
     summary_series = _as_str(c_summary)
 
-    combined: List[str] = []
-    for base, caption, summary in zip(base_series, caption_series, summary_series):
-        pieces = []
-        for value in (base, caption, summary):
-            cleaned = str(value or "").strip()
-            if cleaned and cleaned not in pieces:
-                pieces.append(cleaned)
-        combined.append("\n".join(pieces))
+    primary_text = caption_series.copy()
+    mask_caption_empty = primary_text.astype(str).str.strip() == ""
+    primary_text.loc[mask_caption_empty] = summary_series.loc[mask_caption_empty]
+    mask_still_empty = primary_text.astype(str).str.strip() == ""
+    primary_text.loc[mask_still_empty] = base_series.loc[mask_still_empty]
 
-    out["text"] = pd.Series(combined, index=out.index)
+    out["text"] = primary_text
     out["text_caption"] = caption_series
     out["text_summary"] = summary_series
     out["link"] = _as_str(c_link)
@@ -406,10 +603,12 @@ def load_telegram(path: str) -> pd.DataFrame:
         out["uid"] = (out["author"].str.strip() + ":" + out["messageId"].str.strip()).str.strip(":")
 
     # Texto limpio + emojis
-    out["text_clean"] = out["text"].apply(normalize_whitespace)
     out["text_caption_clean"] = out["text_caption"].apply(normalize_whitespace)
     out["text_summary_clean"] = out["text_summary"].apply(normalize_whitespace)
+    out["text_clean"] = out["text"].apply(normalize_whitespace)
     out["emojis"] = out["text"].apply(extract_emojis)
+    out["lang_raw"] = out["lang"].astype(str)
+    out["lang"] = _enrich_language_series(out["text_clean"], out["lang_raw"])
     out["text_topic"] = _prepare_topic_series(out["text_clean"], out["lang"])
     out["emoji_count"] = out["emojis"].apply(len)
 
@@ -475,6 +674,19 @@ def load_x(path: str) -> pd.DataFrame:
         "place name",
     ]
     url_aliases = ["URL","url","Tweet URL","Tweet link","Link"]
+    handle_aliases = ["Author Username","author username","author_username","username","screen_name","Author Handle","author handle","handle"]
+    profile_url_aliases = ["Author Profile URL","author profile url","profile_url","profile url"]
+    reply_id_aliases = ["Reply to userid","reply to userid","reply_to_userid","in_reply_to_userid","in_reply_to_user_id"]
+    reply_username_aliases = ["Reply to username","reply to username","reply_to_username","in_reply_to_screen_name","in_reply_to_username"]
+    mention_aliases = ["MentionedUsers","mentionedusers","Mentioned Users","mentions","Mentioned Handles","mentioned_handles"]
+    retweeted_handle_aliases = ["Retweeted Username","retweeted username","retweet_username","Retweeted Handle","retweeted_handle","retweet handle"]
+    retweeted_url_aliases = ["Retweeted X URL","retweeted x url","Retweeted Tweet URL","retweet url","Retweeted URL"]
+    retweeted_id_aliases = ["Retweeted X ID","retweeted x id","Retweeted Tweet ID","retweet id","Retweeted ID"]
+    quoted_handle_aliases = ["Quoted Username","quoted username","quote_username","Quoted Handle","quoted_handle","quote handle"]
+    quoted_url_aliases = ["Quoted Tweet URL","quoted tweet url","Quoted X URL","quote url","Quoted URL"]
+    quoted_id_aliases = ["Quoted X ID","quoted x id","Quoted Tweet ID","quote id","Quoted ID"]
+    conversation_aliases = ["Conversation ID","conversation id","conversation_id"]
+    is_reply_aliases = ["Is Reply","is reply","is_reply"]
 
     c_id = _first_col(df, id_aliases)
     c_date = _first_col(df, date_aliases)
@@ -484,6 +696,19 @@ def load_x(path: str) -> pd.DataFrame:
     c_author = _first_col(df, author_aliases) or "author"
     c_url = _first_col(df, url_aliases)
     c_author_location = _first_col(df, location_aliases)
+    c_author_handle = _first_col(df, handle_aliases)
+    c_profile_url = _first_col(df, profile_url_aliases)
+    c_reply_id = _first_col(df, reply_id_aliases)
+    c_reply_username = _first_col(df, reply_username_aliases)
+    c_mentions = _first_col(df, mention_aliases)
+    c_retweeted_handle = _first_col(df, retweeted_handle_aliases)
+    c_retweeted_url = _first_col(df, retweeted_url_aliases)
+    c_retweeted_id = _first_col(df, retweeted_id_aliases)
+    c_quoted_handle = _first_col(df, quoted_handle_aliases)
+    c_quoted_url = _first_col(df, quoted_url_aliases)
+    c_quoted_id = _first_col(df, quoted_id_aliases)
+    c_conversation = _first_col(df, conversation_aliases)
+    c_is_reply = _first_col(df, is_reply_aliases)
 
     if c_text is None:
         raise ValueError("X CSV missing tweet text column (e.g., 'Content'/'text').")
@@ -494,50 +719,102 @@ def load_x(path: str) -> pd.DataFrame:
     if c_author not in df.columns:
         df[c_author] = ""
 
-    out = pd.DataFrame()
+    def _series_str(col_name: Optional[str], *, strip: bool = True) -> pd.Series:
+        if col_name and col_name in df.columns:
+            series = df[col_name].fillna("").astype(str)
+            if strip:
+                series = series.str.strip()
+            return series
+        return pd.Series([""] * len(df), index=df.index, dtype="object")
+
+    out = pd.DataFrame(index=df.index)
     out["source"] = "X"
 
     # tweet_id: columna → URL → sustituto
     if c_id and c_id in df.columns:
-        base_tid = df[c_id].astype(str).str.extract(r"([0-9]{8,25})", expand=False)
+        base_tid = df[c_id].astype(str).str.extract(r"([0-9]{8,25})", expand=False).fillna("")
     else:
-        base_tid = pd.Series([None] * len(df))
+        base_tid = pd.Series([""] * len(df), index=df.index, dtype="object")
 
-    if (base_tid is None) or (base_tid.isna().all()):
-        if c_url and c_url in df.columns:
-            base_tid = df[c_url].astype(str).apply(_extract_tweet_id_from_url)
-        else:
-            base_tid = pd.Series([None] * len(df))
+    if c_url and c_url in df.columns:
+        url_tid = _series_str(c_url, strip=False).apply(lambda v: _extract_tweet_id_from_url(v) or "")
+        mask_empty = base_tid.str.strip() == ""
+        base_tid.loc[mask_empty] = url_tid.loc[mask_empty]
 
-    tmp_text = df[c_text].astype(str).fillna("")
-    tmp_author = df[c_author].astype(str).fillna("")
-    filled_tid = pd.Series(
-        [t if isinstance(t, str) and t.strip() else _surrogate_tweet_id(a, t2)
-         for t, a, t2 in zip(base_tid.fillna(""), tmp_author, tmp_text)],
-        index=df.index,
-    )
-    out["tweet_id"] = filled_tid
+    author_series = _series_str(c_author, strip=False)
+    text_series = _series_str(c_text, strip=False)
+    missing_mask = base_tid.str.strip() == ""
+    if missing_mask.any():
+        fallback_ids = [
+            _surrogate_tweet_id(author or "", text or "")
+            for author, text in zip(author_series.loc[missing_mask], text_series.loc[missing_mask])
+        ]
+        base_tid.loc[missing_mask] = fallback_ids
+
+    out["tweet_id"] = base_tid.fillna("").astype(str)
 
     # FECHA (YYYY-MM-DD)
     if c_date and c_date in df.columns:
-        out["timestamp"] = _normalize_date_series(df[c_date])
+        out["timestamp"] = _normalize_date_series(_series_str(c_date, strip=False))
     else:
-        out["timestamp"] = ""  # sin fecha usable, no forzamos epochs
+        out["timestamp"] = pd.Series([""] * len(df), index=df.index, dtype="object")
 
     # Resto
-    out["author_id"] = df[c_author_id].astype(str)
-    out["author"] = df[c_author].fillna("").astype(str)
-    out["lang"] = df[c_lang].fillna("").astype(str)
-    out["text"] = df[c_text].fillna("").astype(str)
+    out["author_id"] = _series_str(c_author_id)
+    out["author"] = author_series
+    out["text"] = text_series
     out["text_clean"] = out["text"].apply(normalize_whitespace)
+    lang_series_raw = _series_str(c_lang, strip=False)
+    out["lang_raw"] = lang_series_raw
+    out["lang"] = _enrich_language_series(out["text_clean"], lang_series_raw)
     out["text_topic"] = _prepare_topic_series(out["text_clean"], out["lang"])
     out["emojis"] = out["text"].apply(extract_emojis)
     out["emoji_count"] = out["emojis"].apply(len)
-    out["link"] = df[c_url].astype(str) if c_url and (c_url in df.columns) else ""
-    if c_author_location and c_author_location in df.columns:
-        out["author_location"] = df[c_author_location].fillna("").astype(str).str.strip()
+    link_series = _series_str(c_url)
+    out["link"] = link_series
+    out["author_location"] = _series_str(c_author_location)
+
+    handle_series = _series_str(c_author_handle).apply(_extract_handle_candidate)
+    if c_profile_url and c_profile_url in df.columns:
+        profile_handles = _series_str(c_profile_url, strip=False).apply(_extract_handle_from_url)
+        handle_series = handle_series.where(handle_series != "", profile_handles)
+    fallback_handles = author_series.apply(_extract_handle_candidate)
+    handle_series = handle_series.where(handle_series != "", fallback_handles)
+    out["author_handle"] = handle_series.fillna("")
+
+    out["reply_to_userid"] = _series_str(c_reply_id)
+    reply_username_series = _series_str(c_reply_username).apply(_extract_handle_candidate)
+    out["reply_to_username"] = reply_username_series.fillna("")
+
+    out["conversation_id"] = _series_str(c_conversation)
+    is_reply_series = _series_str(c_is_reply).str.upper()
+    out["is_reply"] = is_reply_series.replace({"TRUE": "TRUE", "FALSE": "FALSE"})
+
+    retweeted_handle_series = _series_str(c_retweeted_handle).apply(_extract_handle_candidate)
+    if c_retweeted_url and c_retweeted_url in df.columns:
+        retweeted_handle_series = retweeted_handle_series.where(
+            retweeted_handle_series != "",
+            _series_str(c_retweeted_url, strip=False).apply(_extract_handle_from_url),
+        )
+    out["retweeted_handle"] = retweeted_handle_series.fillna("")
+    out["retweeted_tweet_id"] = _series_str(c_retweeted_id)
+
+    quoted_handle_series = _series_str(c_quoted_handle).apply(_extract_handle_candidate)
+    if c_quoted_url and c_quoted_url in df.columns:
+        quoted_handle_series = quoted_handle_series.where(
+            quoted_handle_series != "",
+            _series_str(c_quoted_url, strip=False).apply(_extract_handle_from_url),
+        )
+    out["quoted_handle"] = quoted_handle_series.fillna("")
+    out["quoted_tweet_id"] = _series_str(c_quoted_id)
+
+    if c_mentions and c_mentions in df.columns:
+        mentions_raw = df[c_mentions]
     else:
-        out["author_location"] = ""
+        mentions_raw = pd.Series([[] for _ in range(len(df))], index=df.index)
+    parsed_mentions = mentions_raw.apply(_parse_mentions_field)
+    out["mentioned_handles"] = parsed_mentions.apply(lambda pair: pair[0])
+    out["mentioned_users"] = parsed_mentions.apply(lambda pair: pair[1])
 
     # Engagement tolerante
     def _to_int(series_name_list: List[str]) -> pd.Series:
@@ -552,10 +829,46 @@ def load_x(path: str) -> pd.DataFrame:
     out["quotes"] = _to_int(["Quotes","quotes"])
     out["views"]  = _to_int(["Views","views","impressions"])
 
-    return out[[
-        "source","timestamp","author","author_location","tweet_id","text","text_clean","text_topic","lang","emojis","emoji_count","link",
-        "likes","retweets","replies","quotes","views"
-    ]]
+    column_order = [
+        "source",
+        "timestamp",
+        "author",
+        "author_id",
+        "author_handle",
+        "author_location",
+        "tweet_id",
+        "text",
+        "text_clean",
+        "text_topic",
+        "lang",
+        "lang_raw",
+        "emojis",
+        "emoji_count",
+        "link",
+        "likes",
+        "retweets",
+        "replies",
+        "quotes",
+        "views",
+        "reply_to_userid",
+        "reply_to_username",
+        "conversation_id",
+        "is_reply",
+        "mentioned_handles",
+        "mentioned_users",
+        "retweeted_handle",
+        "retweeted_tweet_id",
+        "quoted_handle",
+        "quoted_tweet_id",
+    ]
+    # Aseguramos que todas las columnas existen antes de reordenar
+    for col in column_order:
+        if col not in out.columns:
+            if col in {"mentioned_handles", "mentioned_users"}:
+                out[col] = [[] for _ in range(len(out))]
+            else:
+                out[col] = ""
+    return out[column_order]
 
 # =========================
 # Unificación
@@ -569,10 +882,17 @@ def unify_frames(df_tg: pd.DataFrame | None, df_x: pd.DataFrame | None) -> pd.Da
     if df_x is not None and not df_x.empty:
         xx = df_x.rename(columns={"tweet_id": "item_id"}).copy()
         xx["source"] = "X"
-        xx["item_id"] = xx["item_id"].apply(
-            lambda v: v if isinstance(v, str) and v.strip()
-            else _surrogate_tweet_id(xx.get("author", ""), xx.get("text_clean", ""))
-        )
+        xx["item_id"] = xx["item_id"].fillna("").astype(str).str.strip()
+        missing_mask = xx["item_id"].str.strip() == ""
+        if missing_mask.any():
+            fallback_ids = [
+                _surrogate_tweet_id(author or "", text or "")
+                for author, text in zip(
+                    xx.loc[missing_mask, "author"].astype(str),
+                    xx.loc[missing_mask, "text_clean"].astype(str),
+                )
+            ]
+            xx.loc[missing_mask, "item_id"] = fallback_ids
         frames.append(xx)
 
     if not frames:

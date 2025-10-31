@@ -2,8 +2,10 @@ from __future__ import annotations
 import os
 import pandas as pd
 from transformers import pipeline, AutoTokenizer
-from typing import List, Tuple, Dict, Optional
+from typing import List, Tuple, Dict, Optional, Union
 from pathlib import Path
+
+from .utils import resolve_pipeline_device
 
 _OFFLINE_FLAG = {"1", "true", "yes", "on"}
 _DEFAULT_MODEL_NAME = "cardiffnlp/twitter-xlm-roberta-base-sentiment"
@@ -17,7 +19,12 @@ class SentimentScorer:
     Multilenguaje (redes sociales) con XLM-R.
     Usamos top_k=None (en lugar de return_all_scores) para evitar warnings.
     """
-    def __init__(self, device: Optional[int] = None, max_length: int = 256, model_name: Optional[str] = None):
+    def __init__(
+        self,
+        device: Optional[Union[int, str]] = None,
+        max_length: int = 256,
+        model_name: Optional[str] = None,
+    ):
         offline = _is_offline()
         if offline:
             os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
@@ -30,11 +37,12 @@ class SentimentScorer:
             use_fast=False,
             local_files_only=offline,
         )
+        resolved_device = resolve_pipeline_device(device)
         self.clf = pipeline(
             task="text-classification",
             model=chosen_model,
             tokenizer=tokenizer,
-            device=device if device is not None else -1,
+            device=resolved_device,
             truncation=True,
             max_length=max_length,
             top_k=None,  # devuelve lista de dicts con todas las etiquetas
@@ -88,7 +96,7 @@ def add_sentiment(
     df: pd.DataFrame,
     text_col: str = "text_clean",
     batch_size: int = 64,
-    device: Optional[int] = None,
+    device: Optional[Union[int, str]] = None,
     max_length: int = 256,
     out_label_col: str = "sentiment_label",
     out_score_col: str = "sentiment_score",
