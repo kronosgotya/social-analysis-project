@@ -1058,5 +1058,50 @@
     "metadata": {
       "category": "ally_support"
     }
+  },
+  {
+    "name": "Ukraine",
+    "entity_norm": "Ukraine",
+    "type": "related",
+    "aliases": [
+      {
+        "alias": "Ukraine",
+        "weight": 3.6
+      },
+      {
+        "alias": "Ucrania",
+        "weight": 3.4
+      },
+      {
+        "alias": "Ucraina",
+        "weight": 3.3
+      },
+      {
+        "alias": "Ukraina",
+        "weight": 3.3
+      },
+      {
+        "alias": "Україна",
+        "weight": 3.8
+      },
+      {
+        "alias": "Украина",
+        "weight": 3.6
+      },
+      {
+        "alias": "Україна (відмінки)",
+        "weight": 3.4,
+        "pattern": "(?iu)\\bукраїн[а-яіїєґ]+\\b"
+      },
+      {
+        "alias": "Украина (склонения)",
+        "weight": 3.4,
+        "pattern": "(?iu)\\bукраин[а-яё]+\\b"
+      }
+    ],
+    "metadata": {
+      "linked_principal": "NATO",
+      "category": "ally_support"
+    }
   }
 ]

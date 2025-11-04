@@ -42,6 +42,21 @@
         "weight": 8.0
       },
       {
+        "alias": "NATO (extended)",
+        "weight": 7.9,
+        "pattern": "(?i)\\bnato(?:['’]s|[-_/][a-z0-9]+)?\\b"
+      },
+      {
+        "alias": "НАТО (extended)",
+        "weight": 7.9,
+        "pattern": "(?iu)\\bнато[\\w-]*\\b"
+      },
+      {
+        "alias": "OTAN (extended)",
+        "weight": 7.7,
+        "pattern": "(?i)\\botan(?:['’]s|[-_/][a-z0-9]+)?\\b"
+      },
+      {
         "alias": "Nordatlantikpakt",
         "weight": 6.8
       },
@@ -154,6 +169,10 @@
         "weight": 7.6
       },
       {
+        "alias": "나토",
+        "weight": 7.4
+      },
+      {
         "alias": "Північноатлантичний альянс",
         "weight": 6.8
       },
@@ -176,6 +195,10 @@
       {
         "alias": "Rusia",
         "weight": 8.3
+      },
+      {
+        "alias": "Rusya",
+        "weight": 8.0
       },
       {
         "alias": "Federación Rusa",
@@ -214,6 +237,30 @@
         "weight": 7.9
       },
       {
+        "alias": "Россия (склонения)",
+        "weight": 7.5,
+        "pattern": "(?iu)\\bросси(?:я|и|й|ю|е|ей|ям|ями|ях)\\b"
+      },
+      {
+        "alias": "Российский",
+        "weight": 7.2,
+        "pattern": "(?iu)\\bроссийск[а-яё]+\\b"
+      },
+      {
+        "alias": "Русский",
+        "weight": 7.0,
+        "pattern": "(?iu)\\bрусск[а-яё]+\\b"
+      },
+      {
+        "alias": "Russian",
+        "weight": 7.6,
+        "pattern": "(?i)\\brussian(?:s)?\\b"
+      },
+      {
+        "alias": "Russians",
+        "weight": 7.4
+      },
+      {
         "alias": "россия",
         "weight": 7.0
       },
@@ -240,6 +287,16 @@
       {
         "alias": "Venäjä",
         "weight": 8.2
+      },
+      {
+        "alias": "Venäjä (taivutus)",
+        "weight": 7.3,
+        "pattern": "(?iu)\\bvenäj[äa][\\w-]*\\b"
+      },
+      {
+        "alias": "Venäläinen",
+        "weight": 7.1,
+        "pattern": "(?iu)\\bvenäl[äa]is[\\w-]*\\b"
       },
       {
         "alias": "Venäjän federaatio",
@@ -282,6 +339,11 @@
         "weight": 8.2
       },
       {
+        "alias": "Rusija (links)",
+        "weight": 7.2,
+        "pattern": "(?i)\\brusij(?:a|os|ą|oje|ai|omis|oms)\\b"
+      },
+      {
         "alias": "Rusijos Federacija",
         "weight": 7.4
       },
@@ -306,8 +368,29 @@
         "weight": 8.2
       },
       {
+        "alias": "Ruska",
+        "weight": 7.2
+      },
+      {
+        "alias": "Rusku",
+        "weight": 7.2
+      },
+      {
         "alias": "Ruská federácia",
         "weight": 7.4
+      },
+      {
+        "alias": "Rusos",
+        "weight": 7.0
+      },
+      {
+        "alias": "Rusové",
+        "weight": 7.0
+      },
+      {
+        "alias": "Ruské",
+        "weight": 7.1,
+        "pattern": "(?i)\\brusk[áéý]?[a-z]*\\b"
       },
       {
         "alias": "Rusia",

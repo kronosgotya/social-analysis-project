@@ -4,10 +4,10 @@ Multichannel social analytics pipeline built with Python. The project ingests Te
 
 ## Overview
 - Flexible CSV ingestion for Telegram and X with resilient column alias detection.
-- Unified preprocessing pipeline in `src/preprocessing.py` that normalizes metrics and text fields.
-- Hugging Face models: sentiment (`cardiffnlp/twitter-xlm-roberta-base-sentiment`) and emotions (`joeddav/xlm-roberta-large-xnli` by default).
+- Unified preprocessing pipeline in `src/preprocessing.py` that normalizes metrics, text fields, and strips any global sentiment/emotion columns so only entity-scoped metrics propagate downstream.
+- Hugging Face models: sentiment (`cardiffnlp/twitter-xlm-roberta-base-sentiment`) and emotions (`joeddav/xlm-roberta-large-xnli` by default) with entity-level scoring powered by editable alias maps for NATO/Russia.
 - Topic discovery via BERTopic with optional disk cache.
-- Entity-aware sentiment/emotion/topic scoring (defaults: NATO/OTAN and Russia).
+- Entity-aware sentiment/emotion/topic scoring (defaults: NATO/OTAN and Russia) now backed by explicit principal/related alias dictionaries and configurable unknown handling.
 - Directed interaction network for X (mentions, replies, retweets, quotes) exported as `.gexf` plus metrics.
 
 ## Repository Layout
@@ -15,10 +15,12 @@ Multichannel social analytics pipeline built with Python. The project ingests Te
 social-analysis-project/
 ├── data/
 │   ├── raw/                                          # place telegram.csv, x.csv or other raw exports here
-│   └── processed/                               # pipeline outputs (CSV, UTF-8 with BOM)
-│   └── ground_truth/                           # manual labelled data which helps fine-tuning (CSV, UTF-8 with BOM)
+│   ├── processed/                                    # pipeline outputs (csv: facts_posts, geo_country_exploded, facts_posts_tableau, emotions_long, all_platforms)
+│   └── ground_truth/                                 # manual labelled data which helps fine-tuning (CSV, UTF-8 with BOM)
 ├── models/
-│   └── bertopic/                                   # optional BERTopic cache (created at runtime)
+│   ├── bertopic/                                   # optional BERTopic cache (created at runtime)
+│   ├── sentiment_finetuned/                        # fine-tuned targeted sentiment checkpoint (loaded automatically if present)
+│   └── topic_classifier/                           # sentence-transformer classifier for manual topic/subtopic labels
 ├── results/
 │   ├── graphs/                                     # network metrics and GEXF graphs
 │   └── topics/                                      # BERTopic summaries and metadata
@@ -93,9 +95,11 @@ Directories are created on demand through `utils.ensure_dirs`.
 
 ## Core Outputs (`data/processed/`)
 - `telegram_preprocessed.csv`, `x_preprocessed.csv`: platform snapshots with normalized metrics ready for downstream ingestion.
+- `geo_country_exploded.csv`: exploded per-country distribution per `item_id` (deduped, weight + method, exported via `export_tableau_csv` with UTF-8 BOM + `;`).
+- `facts_posts_tableau.csv`: entity-oriented table (principal/related hierarchy, entity-only sentiment and emotion averages, no geo columns).
 - `all_platforms.csv`: combined dataset containing topic assignment, aggregated entity metrics, impact_score, cleaned topic text (`text_topic`), and per-row entity mention payloads (JSON).
 - `facts_posts.csv`: Tableau-ready fact table including engagement, stance, impact_score per post, topic terms (`topic_terms`), expanded emotion probabilities (`emotion_prob_*`), principal topic labels (`manual_label_topic` / `manual_label_subtopic`), and `related_entities` lists such as `"Prime Minister - Russia"`.
-- `facts_posts_tableau.csv`: compact derivative with helper columns (`date`, `text_trunc`, `entity_sentiment_polarity` as JSON per entity) that leaves the original untouched.
+- `facts_posts.csv`: Tableau-ready fact table including engagement, stance, impact_score per post, topic terms (`topic_terms`), expanded emotion probabilities (`emotion_prob_*`), principal topic labels (`manual_label_topic` / `manual_label_subtopic`), and `related_entities` lists such as `"Prime Minister - Russia"`. Use `scripts/process_all.py --split-outputs/--no-split-outputs` to control whether the pipeline also writes the standalone `geo_country_exploded.csv` and `facts_posts_tableau.csv` during the main run.
 - `emotions_long.csv`: tidy emotion probabilities (`item_id`, `emotion`, `prob`).
 - `topics_assignments.csv`, `topics_summary_daily.csv`: BERTopic assignments and daily evolution, enriched with `manual_label_topic` and `manual_label_subtopic` (either curated or model-predicted).
 - `entity_mentions.csv`, `entity_topic_summary.csv`: entity-conditioned sentiment, stance, impact_score, and emotion aggregations.
@@ -142,10 +146,25 @@ Directories are created on demand through `utils.ensure_dirs`.
    - Inspect `results/topics/topics_missing_manual_labels.csv` to identify the next clusters to annotate.
    - Add the new labels in `facts_posts.csv`, rerun `apply_manual_labels.py`, retrain the classifier, and execute `process_all.py` again. Coverage improves with every loop while preserving human supervision.
 
+## Sentiment Fine-Tuning Workflow
+- `data/ground_truth/entity_sentiment_labels.csv` stores the manually curated examples per entity (`snippet`, `entity`, `sentiment_manual`, notes). Each mention is labeled independently, even if multiple entities are discussed in the same post.
+- `scripts/finetune_sentiment.py` reads that CSV directly and builds target-aware inputs in the form `[ENTITY] <principal/alias> ||| <snippet>`, using `alias_hit` when available.
+- Training runs on XLM-R (`cardiffnlp/twitter-xlm-roberta-base-sentiment` by default) with `max_length=512` to preserve as much context as possible, and writes the checkpoint to `models/sentiment_finetuned/`.
+- Recommended run:
+  ```bash
+  python scripts/finetune_sentiment.py \
+    --group-split \
+    --use-class-weights
+  ```
+  - `--group-split` ensures the same `item_id` never appears in both train and eval.
+  - `--use-class-weights` applies inverse-frequency weighting so the underrepresented neutral class keeps a voice.
+  - Additional knobs: `--ground-truth-path` (alternate CSV), `--max-length`, `--min-rows`, `--epochs`, `--batch-size`, `--use-mps` (opt-in Metal acceleration).
+- Training logs `accuracy` and `macro_f1`; `src/sentiment.py` will automatically load the refreshed checkpoint whenever `models/sentiment_finetuned/` exists.
+
 ## Topics and Entity Analytics
 - BERTopic is trained on the combined `text_topic` corpus (lemmatized + stopword-free); if `models/bertopic/global/` already exists the cached model is reused.
 - Topic assignments populate `topic_id`, `topic_label`, and `topic_score` within the unified dataset.
-- Entity analysis supports CLI lists or structured files, and persists `entity_mentions` JSON per post for dashboarding.
+- Entity analysis supports CLI lists or structured files, persists `entity_mentions` JSON per post for dashboarding, and relies on `explode_entity_mentions` to deduplicate snippets and compute per-principal sentiment/emotion averages before export.
 - `entity_topic_summary.csv` stores stance indices/labels, impact_score rollups, and average emotion distributions per `(entity, topic_id)`.
 - `aggregate_mentions_per_item` exposes post-level sentiment, stance, impact_score, and entity coverage (`entities_detected`) for dashboards.
 

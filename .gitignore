@@ -41,6 +41,19 @@ results/graphs/**
 results/charts/**
 !results/charts/.gitkeep
 
+!models/.gitkeep
+models/**
+!models/bertopic/.gitkeep
+!models/bertopic/global/.gitkeep
+!models/bertopic/group_cyrillic/.gitkeep
+!models/bertopic/group_other/.gitkeep
+!models/bertopic/group_western_baltic/.gitkeep
+!models/bertopic/group_western_central/.gitkeep
+!models/bertopic/group_western_core/.gitkeep
+!models/bertopic/group_western_scandi/.gitkeep
+!models/sentiment_finetuned/.gitkeep
+!models/topic_classifier/.gitkeep
+
 # === Archivos grandes/temporales opcionales ===
 *.csv
 !data/ground_truth/entity_sentiment_finetune.csv

@@ -7,7 +7,7 @@ from datetime import datetime, date
 import sys
 import re
 import ast
-from typing import Dict, Optional, List, Set, Any, Iterable
+from typing import Dict, Optional, List, Set, Any, Iterable, Tuple
 from collections import Counter
 
 # --- Fix ruta para importar src/*
@@ -32,13 +32,29 @@ from src.network import (  # noqa: E402
     edges_from_x, nodes_metrics_df
 )
 from src.topics_bertopic import fit_topics, summarize_topics  # noqa: E402
-from src.entities_runtime import load_entities  # noqa: E402
+from src.entities_runtime import (  # noqa: E402
+    load_entities,
+    NATO_ALIASES,
+    RUSSIA_ALIASES,
+    RELATED_TO_PRINCIPAL,
+    DROP_UNKNOWN,
+)
 from src.entity_analysis import (  # noqa: E402
     extract_entity_mentions,
     score_entity_mentions,
     summarize_entity_mentions,
     serialize_mentions_for_export,
     aggregate_mentions_per_item,
+    mentions_to_dataframe,
+    explode_entity_mentions,
+    ENTITY_EMOTION_DIMENSIONS,
+    _normalize_optional_str,
+    _normalize_optional_int,
+    _default_zero,
+    _coerce_float,
+    _span_overlaps,
+    _snippet,
+    MentionCandidate,
 )
 
 
@@ -68,6 +84,174 @@ def _ensure_json_array(value):
         return json.dumps(str(value), ensure_ascii=False)
 
 
+def _parse_json_list(raw: Any) -> List[Any]:
+    if isinstance(raw, list):
+        return raw
+    if raw in (None, "", "[]"):
+        return []
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return []
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                return parsed
+        except Exception:
+            try:
+                parsed = ast.literal_eval(text)
+                if isinstance(parsed, list):
+                    return parsed
+            except Exception:
+                return []
+    return []
+
+
+GEO_OUTPUT_COLUMNS = ["item_id", "country", "weight", "method", "source", "date", "lang"]
+ENTITY_OUTPUT_COLUMNS = [
+    "item_id",
+    "source",
+    "date",
+    "lang",
+    "principal_entity",
+    "related_entity",
+    "alias",
+    "stance",
+    "stance_value",
+    "sentiment_label",
+    "sentiment_score",
+    "emotion_label",
+] + ENTITY_EMOTION_DIMENSIONS + [
+    "impact_score",
+    "engagement",
+    "manual_label_topic",
+    "manual_label_subtopic",
+    "snippet",
+]
+
+
+def _float_or_default(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _normalize_item_date(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (datetime, date)):
+        return value.strftime("%Y-%m-%d")
+    text = str(value).strip()
+    if not text:
+        return ""
+    match = re.search(r"\d{4}-\d{2}-\d{2}", text)
+    if match:
+        return match.group(0)
+    parsed = pd.to_datetime(text, errors="coerce")
+    if pd.isna(parsed):
+        return ""
+    return parsed.date().isoformat()
+
+
+def _build_geo_table(base_df: pd.DataFrame) -> Tuple[pd.DataFrame, int]:
+    geo_rows: List[Dict[str, Any]] = []
+    posts_with_geo = 0
+
+    for _, row in base_df.iterrows():
+        item_date = _normalize_item_date(row.get("timestamp") or row.get("date"))
+        geo_distribution = [
+            entry for entry in _parse_json_list(row.get("geo_country_distribution"))
+            if isinstance(entry, dict)
+        ]
+        if geo_distribution:
+            posts_with_geo += 1
+        for entry in geo_distribution:
+            country = str(entry.get("country") or "").strip()
+            if not country:
+                continue
+            geo_rows.append(
+                {
+                    "item_id": str(row.get("item_id") or "").strip(),
+                    "country": country,
+                    "weight": _float_or_default(entry.get("weight")),
+                    "method": str(entry.get("method") or "").strip(),
+                    "source": str(row.get("source") or "").strip(),
+                    "date": item_date,
+                    "lang": str(row.get("lang") or "").strip(),
+                }
+            )
+
+    geo_df = pd.DataFrame(geo_rows, columns=GEO_OUTPUT_COLUMNS)
+    if not geo_df.empty:
+        geo_df["weight"] = pd.to_numeric(geo_df["weight"], errors="coerce").fillna(0.0)
+        geo_df = geo_df.drop_duplicates(subset=["item_id", "country"], keep="first")
+    return geo_df, posts_with_geo
+
+
+def _build_entity_table(
+    base_df: pd.DataFrame,
+    alias_maps,
+    *,
+    drop_unknown: bool,
+) -> Tuple[pd.DataFrame, int, int]:
+    entity_rows: List[Dict[str, Any]] = []
+    raw_entity_rows = 0
+    posts_with_entities = 0
+
+    for _, row in base_df.iterrows():
+        mentions_list = [
+            m for m in _parse_json_list(row.get("entity_mentions")) if isinstance(m, dict)
+        ]
+        raw_entity_rows += len(mentions_list)
+        exploded = explode_entity_mentions(row, alias_maps, drop_unknown=drop_unknown)
+        if exploded:
+            posts_with_entities += 1
+            entity_rows.extend(exploded)
+
+    entity_df = pd.DataFrame(entity_rows)
+    if entity_df.empty:
+        entity_df = pd.DataFrame(columns=ENTITY_OUTPUT_COLUMNS)
+    else:
+        for emo in ENTITY_EMOTION_DIMENSIONS:
+            entity_df[emo] = entity_df["emotion_scores"].apply(
+                lambda d, key=emo: float(d.get(key, 0.0)) if isinstance(d, dict) else 0.0
+            )
+        entity_df = entity_df.drop(columns=["emotion_scores", "topic_label"], errors="ignore")
+        entity_df = entity_df.drop_duplicates(
+            subset=["item_id", "principal_entity", "related_entity", "stance"],
+            keep="first",
+        )
+        for col in ["stance_value", "sentiment_score", "impact_score", "engagement"]:
+            if col in entity_df.columns:
+                entity_df[col] = pd.to_numeric(entity_df[col], errors="coerce").fillna(0.0)
+        for col in ENTITY_OUTPUT_COLUMNS:
+            if col not in entity_df.columns:
+                if col in ENTITY_EMOTION_DIMENSIONS or col in {"stance_value", "sentiment_score", "impact_score", "engagement"}:
+                    entity_df[col] = 0.0
+                else:
+                    entity_df[col] = ""
+        if "stance" in entity_df.columns:
+            entity_df["stance"] = entity_df["stance"].fillna("neu").replace("", "neu")
+        for col in [
+            "item_id",
+            "manual_label_topic",
+            "manual_label_subtopic",
+            "alias",
+            "related_entity",
+            "snippet",
+            "date",
+            "source",
+            "lang",
+            "principal_entity",
+            "sentiment_label",
+        ]:
+            if col in entity_df.columns:
+                entity_df[col] = entity_df[col].fillna("").astype(str)
+        entity_df = entity_df[ENTITY_OUTPUT_COLUMNS]
+    return entity_df, raw_entity_rows, posts_with_entities
+
+
 ENCODING = "utf-8-sig"
 SEP = ";"
 TOPIC_CLASSIFIER_PATH = Path("models") / "topic_classifier" / "topic_classifier.joblib"
@@ -75,6 +259,72 @@ TOPIC_MANUAL_PATH = Path("data") / "ground_truth" / "topics_manual_labels.csv"
 DEFAULT_CLASSIFIER_EMBED_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 _EMBEDDER_CACHE: Dict[str, SentenceTransformer] = {}
 
+_NATO_FLAG_EMOJIS = "🇺🇸🇬🇧🇫🇷🇩🇪🇮🇹🇪🇸🇵🇹🇳🇱🇧🇪🇱🇺🇨🇦🇳🇴🇩🇰🇸🇪🇫🇮🇮🇸🇵🇱🇨🇿🇸🇰🇭🇺🇷🇴🇧🇬🇬🇷🇹🇷🇸🇮🇭🇷🇲🇪🇲🇰🇦🇱🇪🇪🇱🇻🇱🇹🇦🇺🇳🇿🇨🇭"
+_RUSSIA_FLAG_EMOJIS = "🇷🇺🇧🇾"
+_UKRAINE_FLAG_EMOJI = "🇺🇦"
+
+_NATO_AIR_ASSET_HASHTAGS = [
+    r"f[- ]?35", r"f[- ]?16", r"eurofighter", r"typhoon", r"rafale", r"gripen",
+    r"f[- ]?15", r"f[ah]-?18", r"ef-?18", r"fa-?50", r"e-?3a", r"awacs",
+    r"e-?3\s?sentry", r"e-?7", r"wedgetail", r"mq-?9", r"reaper", r"bayraktar",
+    r"tb-?2", r"scaneagle", r"rq-?20", r"puma", r"raven", r"blackhornet",
+    r"vector", r"phoenixghost", r"uj-?22", r"r-?18", r"uav", r"drone", r"uas",
+    r"natoairasset", r"ukraineairasset"
+]
+
+_RUSSIA_AIR_ASSET_HASHTAGS = [
+    r"su-?57", r"su-?35", r"su-?30", r"su-?27", r"su-?24", r"su-?25",
+    r"mig-?31", r"mig-?29", r"mig-?35", r"mig-?23", r"mig-?21", r"tu-?95",
+    r"tu-?22m3", r"tu-?160", r"il-?76", r"il-?78", r"a-?50u?", r"awacsruso",
+    r"beriev", r"orlan-?10", r"orion", r"forpost", r"shahed", r"geran",
+    r"lancet", r"zala", r"kub", r"supercam", r"eleron", r"okhotnik", r"s-?70",
+    r"uavruso", r"droneruso", r"russianairasset", r"vks"
+]
+
+_FALLBACK_PATTERNS: Dict[str, Dict[str, object]] = {
+    "NATO": {
+        "patterns": [
+            {"regex": re.compile(r"(?iu)\b(?:nato|otan|нато|north atlantic treaty|north atlantic alliance)\b")},
+            {"regex": re.compile(r"(?iu)\bshape\b")},
+            {"regex": re.compile(r"(?iu)supreme headquarters allied powers europe")},
+            {"regex": re.compile(r"(?iu)allied\s+(?:air|joint|combined|command)")},
+            {"regex": re.compile(rf"[{_NATO_FLAG_EMOJIS}]+"), "entity_type": "related", "alias": "NATO flag"},
+            {"regex": re.compile(rf"(?iu)#?(?:{'|'.join(_NATO_AIR_ASSET_HASHTAGS)})\b"), "entity_type": "related"},
+        ],
+        "entity_type": "principal",
+        "linked_principal": "NATO",
+    },
+    "Russia": {
+        "patterns": [
+            {"regex": re.compile(
+                r"(?iu)\b(?:russia|russian(?:s)?|rusia|rusija|rusijos|rusiją|rusijoje|rusko|rusku|rusk[aáéý][\w-]*|"
+                r"rusos|rusové|rusland|venemaa|venāja?|venäjä|venäl[äa]is[\w-]*|"
+                r"россия|россией|россии|россию|российск[а-яё]+|русск[а-яё]+|рф|росія|росії|росію|"
+                r"rosyjsk[a-zęó]+|rosjan|rosję|rosji|"
+                r"kriev[\w-]+|krievu|krievijas|"
+                r"droni\s+russ[iia]+|drones?\s+russes?|"
+                r"rusya|rusya'nın|rusya'ya|rusya'dan|rus hava|rus uça|rus dron|rus ordusu|rusya saldır|"
+                r"rus\w*(?:havan|drone|jet|uçak|hava|füze))\b"
+            )},
+            {"regex": re.compile(rf"[{_RUSSIA_FLAG_EMOJIS}]+"), "entity_type": "related", "alias": "Russian flag"},
+            {"regex": re.compile(r"(?iu)\b(?:geran(?:ium)?[-\s]?2|shahed[-\s]?136|fab[-\s]?(?:100|250|500|1000)|gerbera|gerań)\b"), "entity_type": "related"},
+            {"regex": re.compile(r"(?iu)\b(?:putin|kremlin|moskva|moscow)\b")},
+            {"regex": re.compile(rf"(?iu)#?(?:{'|'.join(_RUSSIA_AIR_ASSET_HASHTAGS)})\b"), "entity_type": "related"},
+        ],
+        "entity_type": "principal",
+        "linked_principal": "Russia",
+    },
+    "Ukraine": {
+        "patterns": [
+            {"regex": re.compile(r"(?iu)\b(?:ukraine|ucrania|ucraina|ukraina|ukrainu|ukraiņu|ukrayna|ukrainsk)\b")},
+            {"regex": re.compile(r"(?iu)\bукраїн[а-яіїєґ]+\b")},
+            {"regex": re.compile(r"(?iu)\bукраин[а-яё]+\b")},
+            {"regex": re.compile(rf"[{_UKRAINE_FLAG_EMOJI}]"), "entity_type": "related", "alias": "Ukraine flag"},
+        ],
+        "entity_type": "related",
+        "linked_principal": "NATO",
+    },
+}
 
 def _get_embedder(model_name: str) -> SentenceTransformer:
     if model_name not in _EMBEDDER_CACHE:
@@ -372,7 +622,6 @@ def _derive_facts_posts_tableau(
     input_path: Path,
     *,
     output_filename: str = "facts_posts_tableau.csv",
-    trunc_len: int = 200,
     sep: str = ";",
     encoding: str = "utf-8-sig",
 ) -> None:
@@ -382,117 +631,148 @@ def _derive_facts_posts_tableau(
 
     df = pd.read_csv(input_path, sep=sep, encoding=encoding, dtype=str)
 
-    total_rows = len(df)
-    if total_rows == 0:
-        output_path = input_path.parent / output_filename
-        export_tableau_csv(df, str(output_path))
-        print(f"ⓘ {output_filename} generated (empty dataset).")
-        return
-
-    timestamp_series = df.get("timestamp", pd.Series(["" for _ in range(total_rows)]))
-    text_series = df.get("text_clean", pd.Series(["" for _ in range(total_rows)]))
-    invalid_timestamp = 0
-    text_null_count = int(text_series.isna().sum())
-
-    def _extract_date(value) -> str:
-        nonlocal invalid_timestamp
-        if pd.isna(value):
-            invalid_timestamp += 1
-            return ""
-        if isinstance(value, (datetime, date)):
-            return value.strftime("%Y-%m-%d")
-        text = str(value).strip()
-        if not text or text.lower() == "nat":
-            invalid_timestamp += 1
-            return ""
-        match = re.search(r"\d{4}-\d{2}-\d{2}", text)
-        if match:
-            return match.group(0)
-        try:
-            parsed = pd.to_datetime(text, errors="raise")
-            return parsed.date().isoformat()
-        except Exception:
-            invalid_timestamp += 1
-            return ""
-
-    def _truncate_text(value) -> str:
-        if pd.isna(value):
-            return ""
-        text = str(value).replace("\r", " ").replace("\n", " ").replace("\t", " ")
-        return text.strip()[:trunc_len]
-
-    def _entity_polarities(value: object):
-        if value in (None, "", "[]"):
-            return []
-        try:
-            mentions = json.loads(value) if isinstance(value, str) else value
-        except Exception:
-            return []
-        if not isinstance(mentions, list):
-            return []
-        sums: Dict[str, float] = {}
-        counts: Dict[str, int] = {}
-        labels: Dict[str, Dict[str, int]] = {}
-        for mention in mentions:
-            if not isinstance(mention, dict):
-                continue
-            entity = str(mention.get("entity") or "").strip()
-            if not entity:
-                continue
-            try:
-                score_val = float(mention.get("sentiment_score", 0.0) or 0.0)
-            except (TypeError, ValueError):
-                score_val = 0.0
-            label = str(mention.get("sentiment_label") or "").strip().lower()
-            if label in {"positive", "pos"}:
-                polarity = score_val
-            elif label in {"negative", "neg"}:
-                polarity = -score_val
-            else:
-                polarity = 0.0
-            sums[entity] = sums.get(entity, 0.0) + polarity
-            counts[entity] = counts.get(entity, 0) + 1
-            labels.setdefault(entity, {})[label] = labels.setdefault(entity, {}).get(label, 0) + 1
-
-        results = []
-        for entity, total in sums.items():
-            count = counts.get(entity, 1)
-            avg = total / count if count else 0.0
-            entity_labels = labels.get(entity, {})
-            dominant_label = "neutral"
-            if entity_labels:
-                dominant_label = max(entity_labels.items(), key=lambda kv: kv[1])[0] or "neutral"
-            results.append({
-                "entity": entity,
-                "avg_polarity": round(avg, 6),
-                "mentions": count,
-                "dominant_label": dominant_label,
-            })
-        return results
-
-    df["date"] = timestamp_series.apply(_extract_date)
-    df["text_trunc"] = text_series.apply(_truncate_text)
-    if "entity_mentions" in df.columns:
-        df["entity_sentiment_polarity"] = df["entity_mentions"].apply(_entity_polarities).apply(
-            lambda rows: json.dumps(rows, ensure_ascii=False)
-        )
-    else:
-        df["entity_sentiment_polarity"] = [json.dumps([], ensure_ascii=False)] * total_rows
-
-    if "sentiment_polarity" in df.columns:
-        df = df.drop(columns=["sentiment_polarity"])
-
+    alias_maps = (NATO_ALIASES, RUSSIA_ALIASES, RELATED_TO_PRINCIPAL)
+    entity_df, raw_mentions, posts_with_entities = _build_entity_table(
+        df,
+        alias_maps,
+        drop_unknown=DROP_UNKNOWN,
+    )
     output_path = input_path.parent / output_filename
-    export_tableau_csv(df, str(output_path))
+    export_tableau_csv(entity_df, str(output_path))
 
     print(
-        "✔ {file} generated → {rows} rows | invalid timestamp: {bad_ts} | empty text_clean: {null_text}".format(
-            file=output_filename,
-            rows=total_rows,
-            bad_ts=invalid_timestamp,
-            null_text=text_null_count,
-        )
+        f"✔ {output_filename} generated → {len(entity_df)} rows | posts with entities: "
+        f"{posts_with_entities} | mentions processed: {raw_mentions}"
     )
+
+
+def _fallback_extract_mentions(
+    df: pd.DataFrame,
+    *,
+    context_window: int,
+    existing_item_ids: Set[str],
+) -> List[MentionCandidate]:
+    if df.empty:
+        return []
+
+    fallback_mentions: List[MentionCandidate] = []
+    debug_counter: Dict[Tuple[str, str], int] = {}
+    sample_matches: Dict[Tuple[str, str], List[str]] = {}
+
+    skipped_existing = 0
+    for _, row in df.iterrows():
+        item_id_value = (
+            _normalize_optional_str(row.get("item_id"))
+            or _normalize_optional_str(row.get("tweet_id"))
+            or ""
+        )
+        if not item_id_value:
+            continue
+        if item_id_value in existing_item_ids:
+            skipped_existing += 1
+            continue
+
+        text_value = str(row.get("text_clean") or "").strip()
+        if not text_value:
+            continue
+
+        source_val = _normalize_optional_str(row.get("source"))
+        timestamp_val = _normalize_optional_str(row.get("timestamp"))
+        lang_val = _normalize_optional_str(row.get("lang"))
+        topic_label_val = _normalize_optional_str(row.get("topic_label"))
+        topic_id_val = _normalize_optional_int(row.get("topic_id"))
+        topic_score_val = _coerce_float(row.get("topic_score"))
+
+        likes_val = _default_zero(_coerce_float(row.get("likes")))
+        shares_val = sum(
+            _default_zero(_coerce_float(row.get(col)))
+            for col in ("retweets", "telegram_forwards", "forward_count", "forwards", "shares")
+        )
+        replies_val = _default_zero(_coerce_float(row.get("replies")))
+        quotes_val = _default_zero(_coerce_float(row.get("quotes")))
+
+        engagement_val = _coerce_float(row.get("engagement"))
+        if engagement_val is None:
+            engagement_val = likes_val + shares_val + replies_val + quotes_val
+
+        views_val = _coerce_float(row.get("views"))
+        reach_val = _coerce_float(row.get("reach")) or views_val
+
+        spans_by_entity: Dict[str, List[Tuple[int, int]]] = {}
+
+        for entity_norm, cfg in _FALLBACK_PATTERNS.items():
+            patterns = cfg.get("patterns", [])
+            entity_type_default = cfg.get("entity_type", "related")
+            linked_principal = cfg.get("linked_principal")
+            entity_spans = spans_by_entity.setdefault(entity_norm, [])
+
+            for pattern_info in patterns:
+                if isinstance(pattern_info, dict):
+                    regex = pattern_info["regex"]
+                    entity_type = pattern_info.get("entity_type", entity_type_default)
+                    alias_override = pattern_info.get("alias")
+                else:
+                    regex = pattern_info
+                    entity_type = entity_type_default
+                    alias_override = None
+
+                for match in regex.finditer(text_value):
+                    span = match.span()
+                    if _span_overlaps(span, entity_spans):
+                        continue
+                    entity_spans.append(span)
+
+                    matched_text = match.group(0)
+                    snippet = _snippet(text_value, matched_text, window=context_window)
+
+                    key = (str(source_val or ""), entity_norm)
+                    debug_counter[key] = debug_counter.get(key, 0) + 1
+                    sample_matches.setdefault(key, []).append(matched_text)
+
+                    fallback_mentions.append(
+                        MentionCandidate(
+                            item_id=item_id_value,
+                            entity=entity_norm,
+                            alias=alias_override or matched_text,
+                            source=source_val,
+                            timestamp=timestamp_val,
+                            topic_id=topic_id_val,
+                            topic_label=topic_label_val,
+                            topic_score=topic_score_val,
+                            lang=lang_val,
+                            full_text=text_value,
+                            snippet=snippet,
+                            engagement=engagement_val,
+                            reach=reach_val,
+                            likes=likes_val,
+                            shares=shares_val,
+                            replies=replies_val,
+                            quotes=quotes_val,
+                            views=views_val,
+                            entity_norm=entity_norm,
+                            entity_type=str(entity_type),
+                            entity_label=entity_norm,
+                            alias_weight=1.0,
+                            matched_text=matched_text,
+                            confidence=1.0,
+                            span_start=span[0],
+                            span_end=span[1],
+                            matched_alias=matched_text,
+                            detector="regex_fallback",
+                            text_source="text_clean",
+                            linked_principal=str(linked_principal) if linked_principal else None,
+                        )
+                    )
+
+    if fallback_mentions:
+        print("ⓘ Fallback summary:")
+        for (src, ent), cnt in sorted(debug_counter.items()):
+            samples = ", ".join(sample_matches[(src, ent)][:3])
+            print(f"   - source={src or 'unknown'} entity={ent} matches={cnt} samples=[{samples}]")
+    if skipped_existing:
+        print(f"ⓘ Fallback skipped {skipped_existing} rows already containing mentions from the primary extractor.")
+
+    return fallback_mentions
 
 def main():
     ap = argparse.ArgumentParser()
@@ -513,6 +793,21 @@ def main():
                     help="Archivo YAML/JSON/TXT con entidades (opcional)")
     ap.add_argument("--entity_window", type=int, default=160,
                     help="Ventana en caracteres alrededor de la mención (contexto)")
+    ap.add_argument("--skip_topics", action="store_true", help="Omitir el modelado de tópicos")
+    ap.add_argument("--skip_emotions", action="store_true", help="Omitir el scoring de emociones")
+    ap.add_argument(
+        "--split-outputs",
+        dest="split_outputs",
+        action="store_true",
+        default=True,
+        help="Escribe geo_country_exploded y facts_posts_tableau (por defecto activado).",
+    )
+    ap.add_argument(
+        "--no-split-outputs",
+        dest="split_outputs",
+        action="store_false",
+        help="Desactiva la escritura de salidas separadas.",
+    )
     args = ap.parse_args()
 
     raw_device = args.device
@@ -606,7 +901,7 @@ def main():
                 topic_text_col = "text_clean"
 
         topic_mask = df_all[topic_text_col].astype(str).str.strip() != ""
-        if topic_mask.any():
+        if topic_mask.any() and not args.skip_topics:
             topic_df = df_all[topic_mask].copy()
             lang_series = topic_df.get("lang", pd.Series([""] * len(topic_df), index=topic_df.index)).astype(str).str.strip().str.lower()
 
@@ -1025,7 +1320,7 @@ def main():
             df_all["topic_label"] = pd.NA
             df_all["topic_score"] = pd.NA
 
-        # Entity-conditioned sentiment + emociones
+        # Entity-conditioned sentimiento + fallback
         if entities:
             caption_col = "text_caption_clean" if "text_caption_clean" in df_all.columns else None
             summary_col = "text_summary_clean" if "text_summary_clean" in df_all.columns else None
@@ -1042,20 +1337,77 @@ def main():
                 caption_weight=0.8,
                 summary_weight=0.2,
             )
-            mentions_df = score_entity_mentions(
-                mentions,
-                sentiment_device=args.device,
-                emotion_device=args.device,
-                emotion_model=args.emotion_model,
+
+            source_series = df_all["source"] if "source" in df_all.columns else pd.Series(dtype=str)
+            sources_present = {
+                str(src).strip()
+                for src in source_series.dropna().unique().tolist()
+                if str(src).strip()
+            }
+            print("ⓘ Sources present before entity extraction:", sorted(sources_present))
+            print(
+                "ⓘ Sample counts by source:",
+                {
+                    src: int((df_all["source"].astype(str).str.strip() == src).sum())
+                    for src in sources_present
+                },
             )
+
+            detected_sources = Counter(
+                (getattr(m, "source", "") or "").strip() or "unknown" for m in mentions
+            )
+            existing_item_ids = {
+                str(getattr(m, "item_id", "")).strip()
+                for m in mentions
+                if getattr(m, "item_id", None)
+            }
+            print("ⓘ Detected sources (initial):", dict(detected_sources))
+
+            fallback_mentions = _fallback_extract_mentions(
+                df_all,
+                context_window=args.entity_window,
+                existing_item_ids=existing_item_ids,
+            )
+            if fallback_mentions:
+                mentions.extend(fallback_mentions)
+                detected_sources.update(
+                    (getattr(m, "source", "") or "").strip() or "unknown"
+                    for m in fallback_mentions
+                )
+                fallback_sources = sorted({(getattr(m, "source", "") or "").strip() or "unknown" for m in fallback_mentions})
+                print(
+                    "✔ Fallback entity detection added"
+                    f" {len(fallback_mentions)} mentions for sources: {', '.join(fallback_sources)}"
+                )
+
+            if mentions:
+                formatted_counts = ", ".join(
+                    f"{src or 'unknown'}: {count}"
+                    for src, count in sorted(detected_sources.items(), key=lambda kv: kv[0])
+                )
+                print(
+                    f"✔ Entity mentions detected before scoring ({len(mentions)} total) → {formatted_counts}"
+                )
+
+            if args.skip_emotions:
+                mentions_df = mentions_to_dataframe(mentions)
+            else:
+                mentions_df = score_entity_mentions(
+                    mentions,
+                    sentiment_device=args.device,
+                    emotion_device=args.device,
+                    emotion_model=args.emotion_model,
+                )
+
             if not mentions_df.empty:
                 mentions_export = serialize_mentions_for_export(mentions_df)
                 export_tableau_csv(mentions_export, "data/processed/entity_mentions.csv")
-                summary_mentions = summarize_entity_mentions(mentions_df)
-                export_tableau_csv(summary_mentions, "data/processed/entity_topic_summary.csv")
-                item_summary = aggregate_mentions_per_item(mentions_df)
-                if not item_summary.empty:
-                    df_all = df_all.merge(item_summary, on="item_id", how="left")
+                if not args.skip_emotions:
+                    summary_mentions = summarize_entity_mentions(mentions_df)
+                    export_tableau_csv(summary_mentions, "data/processed/entity_topic_summary.csv")
+                    item_summary = aggregate_mentions_per_item(mentions_df)
+                    if not item_summary.empty:
+                        df_all = df_all.merge(item_summary, on="item_id", how="left")
 
                 item_to_mentions = {}
                 for rec in mentions_df.to_dict(orient="records"):
@@ -1084,6 +1436,20 @@ def main():
                 df_all["entity_mentions"] = df_all["item_id"].astype(str).apply(
                     lambda uid: json.dumps(item_to_mentions.get(uid, []), ensure_ascii=False)
                 )
+                mention_source_series = (
+                    mentions_df["source"] if "source" in mentions_df.columns else pd.Series(dtype=str)
+                )
+                sources_with_mentions = {
+                    str(src).strip()
+                    for src in mention_source_series.dropna().unique().tolist()
+                    if str(src).strip()
+                }
+                missing_after = sorted(s for s in sources_present if s not in sources_with_mentions)
+                if missing_after:
+                    print(
+                        "⚠️ No entity mentions extracted for sources: "
+                        + ", ".join(missing_after)
+                    )
             else:
                 print("ⓘ No mentions found for the configured entities.")
                 df_all["entity_mentions"] = df_all["item_id"].astype(str).apply(lambda _: "[]")
@@ -1149,12 +1515,35 @@ def main():
 
         df_all = add_dominant_emotion(df_all)
 
+        alias_maps = (NATO_ALIASES, RUSSIA_ALIASES, RELATED_TO_PRINCIPAL)
+        total_posts = len(df_all)
+        geo_df, posts_with_geo = _build_geo_table(df_all)
+        entity_df, raw_entity_rows, posts_with_entities = _build_entity_table(
+            df_all,
+            alias_maps,
+            drop_unknown=DROP_UNKNOWN,
+        )
+        geo_rows_count = len(geo_df)
+        entity_rows_after = len(entity_df)
+
+        if args.split_outputs:
+            export_tableau_csv(geo_df, "data/processed/geo_country_exploded.csv")
+            export_tableau_csv(entity_df, "data/processed/facts_posts_tableau.csv")
+            print("✔ Generated split outputs (geo_country_exploded.csv, facts_posts_tableau.csv)")
+
+        print("Pipeline stats:")
+        print(f"  Total posts: {total_posts}")
+        print(f"  Posts with geo data: {posts_with_geo}")
+        print(f"  Posts with entities: {posts_with_entities}")
+        print(f"  Geo rows exploded: {geo_rows_count}")
+        print(f"  Entity rows exploded (raw/deduped): {raw_entity_rows}/{entity_rows_after}")
+
         # Base de hechos para Tableau
         facts_cols = [
             "source","timestamp","author","author_location","item_id","lang","geolocation","geo_country_distribution",
-            "sentiment_label","sentiment_score","stance","stance_value",
+            "stance","stance_value",
             "impact_score","impact_score_mean","n_entity_mentions","entities_detected",
-            "emotion_label","emotion_scores","emoji_count","text_clean","text_topic","topic_terms","link","likes","retweets","replies","quotes","views",
+            "emoji_count","text_clean","text_topic","topic_terms","link","likes","retweets","replies","quotes","views",
             "topic_id","topic_label","topic_score","manual_label_topic","manual_label_subtopic","related_entities","entity_sentiment_polarity","entity_mentions"
         ]
         facts_cols = [c for c in facts_cols if c in df_all.columns]
@@ -1170,12 +1559,6 @@ def main():
                     return {}
             return {}
 
-        if "emotion_scores" in df_all.columns:
-            emotion_matrix = pd.json_normalize(df_all["emotion_scores"].apply(_to_dict_safe)).fillna(0.0)
-            if not emotion_matrix.empty:
-                emotion_matrix = emotion_matrix.reindex(facts.index).fillna(0.0)
-                emotion_matrix.columns = [f"emotion_prob_{c}" for c in emotion_matrix.columns]
-                facts = pd.concat([facts, emotion_matrix], axis=1)
         if "impact_score" in facts.columns:
             facts["impact_score"] = facts["impact_score"].fillna(0.0)
         if "impact_score_mean" in facts.columns:
@@ -1200,12 +1583,6 @@ def main():
             facts["geo_country_distribution"] = facts["geo_country_distribution"].apply(
                 _ensure_json_array
             )
-        if "emotion_scores" in facts.columns:
-            facts["emotion_scores"] = facts["emotion_scores"].apply(
-                lambda v: json.dumps(v, ensure_ascii=False)
-                if isinstance(v, dict)
-                else ("{}" if pd.isna(v) or v == "" else str(v))
-            )
         # engagement coherente (0 si falta)
         if set(["likes","retweets","replies","quotes"]).issubset(facts.columns):
             facts["engagement"] = facts[["likes","retweets","replies","quotes"]].fillna(0).astype(float).sum(axis=1)
@@ -1213,7 +1590,8 @@ def main():
             facts["engagement"] = 0
 
         export_tableau_csv(facts, "data/processed/facts_posts.csv")
-        _derive_facts_posts_tableau(Path("data/processed/facts_posts.csv"))
+        if not args.split_outputs:
+            _derive_facts_posts_tableau(Path("data/processed/facts_posts.csv"))
 
         # Emotions long
         emo_long = emotions_to_long(df_all)

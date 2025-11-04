@@ -773,6 +773,7 @@ def load_x(path: str) -> pd.DataFrame:
     link_series = _series_str(c_url)
     out["link"] = link_series
     out["author_location"] = _series_str(c_author_location)
+    out["geolocation"] = out["author_location"]
 
     handle_series = _series_str(c_author_handle).apply(_extract_handle_candidate)
     if c_profile_url and c_profile_url in df.columns:
@@ -829,6 +830,11 @@ def load_x(path: str) -> pd.DataFrame:
     out["quotes"] = _to_int(["Quotes","quotes"])
     out["views"]  = _to_int(["Views","views","impressions"])
 
+    out["geo_country_distribution"] = [
+        _geo_country_distribution(geo, lang)
+        for geo, lang in zip(out["geolocation"], out["lang"])
+    ]
+
     column_order = [
         "source",
         "timestamp",
@@ -836,6 +842,7 @@ def load_x(path: str) -> pd.DataFrame:
         "author_id",
         "author_handle",
         "author_location",
+        "geolocation",
         "tweet_id",
         "text",
         "text_clean",
@@ -860,6 +867,7 @@ def load_x(path: str) -> pd.DataFrame:
         "retweeted_tweet_id",
         "quoted_handle",
         "quoted_tweet_id",
+        "geo_country_distribution",
     ]
     # Aseguramos que todas las columnas existen antes de reordenar
     for col in column_order:
@@ -910,5 +918,18 @@ def unify_frames(df_tg: pd.DataFrame | None, df_x: pd.DataFrame | None) -> pd.Da
         if col not in df.columns:
             df[col] = 0
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
+
+    drop_globals = [
+        "sentiment_label",
+        "sentiment_score",
+        "emotion_label",
+        "emotion_scores",
+        "emotion_prob_positive",
+        "emotion_prob_negative",
+        "emotion_prob_neutral",
+    ]
+    drop_existing = [col for col in drop_globals if col in df.columns]
+    if drop_existing:
+        df = df.drop(columns=drop_existing)
 
     return df[base_cols + [c for c in df.columns if c not in base_cols]]

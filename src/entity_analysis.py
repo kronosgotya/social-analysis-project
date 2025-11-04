@@ -3,6 +3,7 @@ Herramientas para detección y análisis de entidades con sentimiento/emociones 
 """
 from __future__ import annotations
 
+import ast
 import json
 import logging
 import math
@@ -10,6 +11,7 @@ import re
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from collections import defaultdict
 
 import pandas as pd
 from tqdm.auto import tqdm
@@ -20,6 +22,19 @@ from .emotions import EmotionClassifier, DEFAULT_EMOTIONS
 
 PRIMARY_ENTITIES: Set[str] = {"NATO", "Russia"}
 PRIMARY_ONLY_FOR_KPIS: bool = True
+
+ENTITY_EMOTION_DIMENSIONS = [
+    "anger",
+    "disgust",
+    "fear",
+    "guilt",
+    "joy",
+    "love",
+    "optimism",
+    "sadness",
+    "shame",
+    "surprise",
+]
 
 DEFAULT_ENTITY_DIR = Path(__file__).resolve().parent.parent / "data" / "entities"
 
@@ -130,6 +145,334 @@ def _fallback_principal_specs() -> List[EntitySpec]:
             )
         )
     return specs
+
+
+def explode_entity_mentions(row, alias_maps, drop_unknown: bool = True) -> List[Dict[str, Any]]:
+    """
+    row: dict/Series con campos item_id, source, date, lang, entity_mentions(JSON), topic_label, impact_score, engagement.
+    alias_maps: (NATO_ALIASES, RUSSIA_ALIASES, RELATED_TO_PRINCIPAL)
+    return: list[dict] con filas explosionadas por entidad usando principal_entity/related_entity/alias + métricas por entidad.
+    """
+
+    logger = logging.getLogger(__name__)
+    nato_aliases, russia_aliases, related_to_principal = alias_maps
+
+    nato_aliases_cf = {str(val).casefold() for val in nato_aliases}
+    russia_aliases_cf = {str(val).casefold() for val in russia_aliases}
+    related_map_cf = {str(key).casefold(): str(val) for key, val in related_to_principal.items()}
+
+    if isinstance(row, pd.Series):
+        row_data = row.to_dict()
+    else:
+        row_data = dict(row)
+
+    item_id = str(row_data.get("item_id") or "").strip()
+    source = str(row_data.get("source") or "").strip()
+    lang = str(row_data.get("lang") or "").strip()
+    date_value = row_data.get("date") or row_data.get("timestamp")
+    topic_label = str(row_data.get("topic_label") or "").strip()
+    manual_topic = str(row_data.get("manual_label_topic") or "").strip()
+    manual_subtopic = str(row_data.get("manual_label_subtopic") or "").strip()
+
+    def _normalize_date(value) -> str:
+        if value is None or (isinstance(value, float) and math.isnan(value)):
+            return ""
+        if isinstance(value, (pd.Timestamp,)):
+            return value.date().isoformat()
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return ""
+            match = re.search(r"\d{4}-\d{2}-\d{2}", text)
+            if match:
+                return match.group(0)
+            parsed = pd.to_datetime(text, errors="coerce")
+            if pd.isna(parsed):
+                return ""
+            return parsed.date().isoformat()
+        parsed = pd.to_datetime(value, errors="coerce")
+        if pd.isna(parsed):
+            return ""
+        return parsed.date().isoformat()
+
+    def _parse_mentions(raw_value: Any) -> List[Dict[str, Any]]:
+        if isinstance(raw_value, list):
+            return [m for m in raw_value if isinstance(m, dict)]
+        if raw_value in (None, "", "[]"):
+            return []
+        if isinstance(raw_value, str):
+            text = raw_value.strip()
+            if not text:
+                return []
+            try:
+                parsed = json.loads(text)
+                if isinstance(parsed, list):
+                    return [m for m in parsed if isinstance(m, dict)]
+            except Exception:
+                try:
+                    fixed = text.replace("'", "\"")
+                    parsed = json.loads(fixed)
+                    if isinstance(parsed, list):
+                        return [m for m in parsed if isinstance(m, dict)]
+                except Exception:
+                    try:
+                        parsed = ast.literal_eval(text)
+                        if isinstance(parsed, list):
+                            return [m for m in parsed if isinstance(m, dict)]
+                    except Exception as exc:
+                        logger.warning("Malformed entity_mentions for item %s: %s", item_id or "<unknown>", exc)
+        return []
+
+    def _parse_emotions(value: Any) -> Dict[str, float]:
+        if isinstance(value, dict):
+            out: Dict[str, float] = {}
+            for k, v in value.items():
+                try:
+                    val = float(v)
+                except (TypeError, ValueError):
+                    continue
+                if math.isnan(val) or math.isinf(val):
+                    continue
+                out[str(k)] = val
+            return out
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return {}
+            try:
+                parsed = json.loads(text)
+                if isinstance(parsed, dict):
+                    return _parse_emotions(parsed)
+            except Exception:
+                try:
+                    parsed = ast.literal_eval(text)
+                    if isinstance(parsed, dict):
+                        return _parse_emotions(parsed)
+                except Exception:
+                    return {}
+        return {}
+
+    def _infer_principal(token: Optional[str]) -> Optional[str]:
+        if not token:
+            return None
+        cf = token.casefold()
+        if cf in nato_aliases_cf:
+            return "NATO"
+        if cf in russia_aliases_cf:
+            return "Russia"
+        mapped = related_map_cf.get(cf)
+        if mapped in {"NATO", "Russia"}:
+            return mapped
+        return None
+
+    def _resolve_principal(mention: Dict[str, Any]) -> Optional[str]:
+        candidates = [
+            mention.get("linked_principal"),
+            mention.get("principal_entity"),
+            mention.get("entity_norm"),
+            mention.get("entity"),
+            mention.get("entity_label"),
+            mention.get("matched_text"),
+            mention.get("alias"),
+        ]
+        for value in candidates:
+            token = str(value).strip() if value is not None else ""
+            principal = _infer_principal(token) if token else None
+            if principal:
+                return principal
+        return None
+
+    def _coerce_float(value: Any, default: float = 0.0) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _stance_from_value(value: float) -> str:
+        if value > 0.15:
+            return "pos"
+        if value < -0.15:
+            return "neg"
+        return "neu"
+
+    def _sentiment_label_from_score(score: float) -> str:
+        if score > 0.15:
+            return "positive"
+        if score < -0.15:
+            return "negative"
+        return "neutral"
+
+    def _dominant_label(labels: List[str], fallback_score: float) -> str:
+        cleaned = [lab for lab in labels if lab]
+        if cleaned:
+            counts = pd.Series(cleaned).value_counts()
+            if not counts.empty:
+                return counts.idxmax()
+        return _sentiment_label_from_score(fallback_score)
+
+    def _coerce_snippet(value: Any) -> str:
+        if not isinstance(value, str):
+            return ""
+        snippet = value.strip()
+        return snippet
+
+    date_norm = _normalize_date(date_value)
+    mentions = _parse_mentions(row_data.get("entity_mentions"))
+    if not mentions:
+        return []
+
+    dedup_keys: Set[Tuple[str, str, str, str]] = set()
+    snippet_keys: Set[Tuple[str, str, str]] = set()
+    cleaned_mentions: List[Dict[str, Any]] = []
+
+    for mention in mentions:
+        principal = _resolve_principal(mention)
+        if not principal:
+            if drop_unknown:
+                continue
+        related = str(mention.get("entity") or mention.get("entity_norm") or "").strip()
+        if not related:
+            related = principal or ""
+        alias = str(mention.get("alias") or mention.get("matched_alias") or "").strip()
+        sentiment_score = _coerce_float(mention.get("sentiment_score"))
+        stance_value = _coerce_float(mention.get("stance_value"), sentiment_score)
+        stance = str(mention.get("stance") or "").strip().lower()
+        if stance not in {"pos", "neg", "neu"}:
+            stance = _stance_from_value(stance_value)
+        sentiment_label = str(mention.get("sentiment_label") or "").strip().lower()
+        if sentiment_label not in {"positive", "negative", "neutral"}:
+            sentiment_label = _sentiment_label_from_score(sentiment_score)
+        emotion_label = str(mention.get("emotion_label") or "").strip()
+        emotion_scores = _parse_emotions(mention.get("emotion_scores"))
+        impact_score = _coerce_float(mention.get("impact_score"), _coerce_float(row_data.get("impact_score")))
+        engagement = _coerce_float(mention.get("engagement"), _coerce_float(row_data.get("engagement")))
+        snippet = _coerce_snippet(mention.get("snippet"))
+
+        dedup_key = (item_id, principal or "", related or "", stance)
+        if dedup_key in dedup_keys:
+            continue
+        dedup_keys.add(dedup_key)
+
+        if snippet:
+            snippet_key = (snippet.lower(), principal or "", related or "")
+            if snippet_key in snippet_keys:
+                continue
+            snippet_keys.add(snippet_key)
+
+        cleaned_mentions.append(
+            {
+                "principal_entity": principal or "",
+                "related_entity": related or "",
+                "alias": alias,
+                "stance": stance,
+                "stance_value": stance_value,
+                "sentiment_label": sentiment_label,
+                "sentiment_score": sentiment_score,
+                "emotion_label": emotion_label,
+                "emotion_scores": emotion_scores,
+                "impact_score": impact_score,
+                "engagement": engagement,
+                "snippet": snippet,
+            }
+        )
+
+    if not cleaned_mentions:
+        return []
+
+    aggregates: Dict[str, Dict[str, Any]] = {}
+    for entry in cleaned_mentions:
+        principal = entry["principal_entity"]
+        if not principal:
+            if drop_unknown:
+                continue
+        agg = aggregates.setdefault(
+            principal,
+            {
+                "related": set(),
+                "aliases": set(),
+                "snippets": [],
+                "sentiment_weight": 0.0,
+                "sentiment_total": 0.0,
+                "stance_weighted": 0.0,
+                "emotion_totals": defaultdict(float),
+                "impact_total": 0.0,
+                "engagement_total": 0.0,
+                "sentiment_labels": [],
+            },
+        )
+
+        weight = entry["engagement"]
+        if weight <= 0:
+            weight = entry["impact_score"]
+        if weight <= 0:
+            weight = 1.0
+
+        agg["sentiment_weight"] += weight
+        agg["sentiment_total"] += entry["sentiment_score"] * weight
+        agg["stance_weighted"] += entry["stance_value"] * weight
+        for emo, val in entry["emotion_scores"].items():
+            try:
+                agg["emotion_totals"][emo] += float(val) * weight
+            except (TypeError, ValueError):
+                continue
+        agg["impact_total"] += entry["impact_score"]
+        agg["engagement_total"] += entry["engagement"]
+        agg["related"].add(entry["related_entity"])
+        if entry["alias"]:
+            agg["aliases"].add(entry["alias"])
+        if entry["snippet"]:
+            agg["snippets"].append(entry["snippet"])
+        agg["sentiment_labels"].append(entry["sentiment_label"])
+
+    results: List[Dict[str, Any]] = []
+    for principal, payload in aggregates.items():
+        weight = payload["sentiment_weight"] if payload["sentiment_weight"] > 0 else float(len(cleaned_mentions))
+        if weight <= 0:
+            weight = 1.0
+
+        mean_sentiment = payload["sentiment_total"] / weight
+        mean_stance_value = payload["stance_weighted"] / weight
+        sentiment_label = _dominant_label(payload["sentiment_labels"], mean_sentiment)
+        stance = _stance_from_value(mean_stance_value)
+
+        emotion_scores = {}
+        for emo in ENTITY_EMOTION_DIMENSIONS:
+            total = payload["emotion_totals"].get(emo, 0.0)
+            emotion_scores[emo] = total / weight if weight else 0.0
+        emotion_sum = sum(emotion_scores.values())
+        if emotion_sum > 0:
+            emotion_scores = {k: (v / emotion_sum) for k, v in emotion_scores.items()}
+        else:
+            emotion_scores = {k: 0.0 for k in ENTITY_EMOTION_DIMENSIONS}
+        emotion_label = max(emotion_scores, key=emotion_scores.get) if emotion_scores else ""
+        if emotion_scores and all(val == 0.0 for val in emotion_scores.values()):
+            emotion_label = ""
+
+        results.append(
+            {
+                "item_id": item_id,
+                "source": source,
+                "date": date_norm,
+                "lang": lang,
+                "principal_entity": principal,
+                "related_entity": " | ".join(sorted({val for val in payload["related"] if val})) or principal,
+                "alias": " | ".join(sorted({val for val in payload["aliases"] if val})),
+                "stance": stance,
+                "stance_value": mean_stance_value,
+                "sentiment_label": sentiment_label,
+                "sentiment_score": mean_sentiment,
+                "emotion_label": emotion_label,
+                "emotion_scores": emotion_scores,
+                "impact_score": payload["impact_total"],
+                "engagement": payload["engagement_total"],
+                "topic_label": topic_label,
+                "manual_label_topic": manual_topic,
+                "manual_label_subtopic": manual_subtopic,
+                "snippet": " || ".join(payload["snippets"]),
+            }
+        )
+
+    return results
 
 
 @dataclass(frozen=True)

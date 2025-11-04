@@ -4,11 +4,22 @@ entities_runtime.py
 Capa de selección de ENTIDADES runtime (sin hardcode).
 - Entrada: --entities "OTAN,Rusia" o --entities-file path.{yml|yaml|json|txt}
 - Salida: lista de entidades [{name:str, type:str|None, aliases:list[str]}]
+Además expone mapas de alias básicos utilizados durante la explosión de entidades.
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 import json, os
+
+NATO_ALIASES = {"NATO", "OTAN", "НАТО"}
+RUSSIA_ALIASES = {"Russia", "Rusia", "Россия"}
+RELATED_TO_PRINCIPAL = {
+    "Ukraine": "NATO",
+    "Ucrania": "NATO",
+    "Украина": "NATO",
+    "Україна": "NATO",
+}
+DROP_UNKNOWN = True
 
 try:
     import yaml  # opcional: PyYAML en requirements

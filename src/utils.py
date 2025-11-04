@@ -12,7 +12,6 @@ Utilidades comunes:
 from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Union
-import csv
 import json
 
 import pandas as pd
@@ -113,14 +112,9 @@ def emotions_to_long(df: pd.DataFrame, scores_col: str = "emotion_scores") -> pd
 
 
 def export_tableau_csv(df: pd.DataFrame, path: str) -> None:
-    """
-    Exporta con:
-    - UTF-8 con BOM (utf-8-sig) para Excel
-    - Separador ';' (habitual en ES/EU)
-    - Sin índice
-    """
+    """Exporta DataFrame con formato compatible Tableau/Excel (UTF-8 BOM + ';')."""
     Path(path).parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(path, sep=";", index=False, encoding="utf-8-sig", quoting=csv.QUOTE_MINIMAL, lineterminator="\n")
+    df.to_csv(path, index=False, sep=";", encoding="utf-8-sig")
 
 
 def coerce_datetime_series(s: pd.Series) -> pd.Series:
