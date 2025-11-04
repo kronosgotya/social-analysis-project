@@ -183,6 +183,8 @@ It includes:
 - **Engagement Trend:** Weekly total engagement trend, helping identify peaks of audience attention.
 - **Polarity by Entity:** Horizontal bar chart comparing the share of positive vs. negative sentiment per entity.
 
+![Social Sentiment Overview Dashboard](results/charts/images/social-sentiment-overview-dashboard.png)
+
 *Insights:*  
 This view allows analysts to identify major fluctuations in sentiment and emotion over time, detect disinformation or propaganda peaks, and correlate engagement trends with real-world events. It emphasizes differences in tone and emotional composition between NATO- and Russia-oriented content.
 
@@ -193,6 +195,8 @@ It combines `geo_country_exploded.csv` with `facts_posts_tableau.csv` via `item_
   Red tones represent negative sentiment, blue/green tones represent positive sentiment.
 - **Parameters:** Dropdown (`pPrincipal`) to toggle between NATO and Russia.  
 - **Filters:** Date range, platform (Telegram/X), and language.
+
+![Global Sentiment Map](results/charts/images/global-sentiment-map.png)
 
 *Insights:*  
 This map highlights regional variations in sentiment and helps locate geographic clusters of support or hostility.  
@@ -205,6 +209,8 @@ It contains:
   NATO-related entities are shown in blue tones; Russia-related entities in red tones.
 - **Main Topic Chart:** Bar chart of the top-level manual topics (`manual_label_topic`), showing the most discussed thematic clusters.
 - **Top Subtopics:** Bar chart listing the five most frequent subtopics (`manual_label_subtopic`) within selected topics, based on the count of `item_id`.
+
+![Entities & Topics Summary](results/charts/images/entities-topics-summary-dashboard.png)
 
 *Insights:*  
 This view reveals the thematic focus of the discourse, identifies what entities are most often mentioned alongside NATO or Russia (e.g., Ukraine, F-16, Putin), and provides a quick overview of the most active subtopics such as “airspace violations” or “drone warfare.”
