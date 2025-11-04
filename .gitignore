@@ -15,17 +15,16 @@ dist/
 venv/
 env/
 
-# === Jupyter (por si usas cuadernos) ===
+# === Jupyter  ===
 .ipynb_checkpoints/
 
-# === Sistemas / IDE ===
+# === System / IDE ===
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
 
-# === Datos (NO versionar CSVs de entrada ni salidas generadas) ===
-# Mantén las carpetas vacías con un .gitkeep
+# === Data  ===
 
 !data/.gitkeep
 data/raw/**
@@ -54,8 +53,9 @@ models/**
 !models/bertopic/group_western_scandi/.gitkeep
 !models/sentiment_finetuned/.gitkeep
 !models/topic_classifier/.gitkeep
+bertopic_model.pkl
 
-# === Archivos grandes/temporales opcionales ===
+# === Big/Temp Files ===
 *.csv
 !data/ground_truth/entity_sentiment_finetune.csv
 !data/ground_truth/topics_manual_finetune.csv
@@ -67,7 +67,7 @@ models/**
 *.svg
 *.jpg
 *.jpeg
-bertopic_model.pkl
+*.swp
 
-# Si tienes algún .env local para pruebas
-.env
+
+
