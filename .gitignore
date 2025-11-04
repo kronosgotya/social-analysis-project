@@ -37,8 +37,10 @@ data/processed/**
 results/graphs/**
 !results/graphs/.gitkeep
 
-results/charts/**
-!results/charts/.gitkeep
+results/charts/*.twbr
+results/charts/*.twb
+!results/charts/social-analysis-dashboards.twbx
+
 !results/charts/social-analysis-dashboards.twbx
 
 !models/.gitkeep
@@ -63,7 +65,6 @@ bertopic_model.pkl
 *.parquet
 *.feather
 *.gexf
-*.png
 *.svg
 *.jpg
 *.jpeg

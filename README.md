@@ -169,6 +169,49 @@ Directories are created on demand through `utils.ensure_dirs`.
 - `entity_topic_summary.csv` stores stance indices/labels, impact_score rollups, and average emotion distributions per `(entity, topic_id)`.
 - `aggregate_mentions_per_item` exposes post-level sentiment, stance, impact_score, and entity coverage (`entities_detected`) for dashboards.
 
+## Tableau Dashboards
+
+The processed CSV files are designed to feed a set of interactive Tableau dashboards that visualize sentiment, emotions, topics, entities, and geographical impact. These dashboards provide a full analytical view of how NATO- and Russia-related narratives evolve across Telegram and X, allowing for sentiment comparison, emotional tone tracking, and regional influence assessment.
+
+### 1. Entity Sentiment & Emotion Overview
+This dashboard focuses on comparative sentiment and emotional dynamics towards NATO and Russia.
+It includes:
+- **Global KPIs:** Average engagement, total posts, and overall impact score across all posts.
+- **Sentiment Distribution:** Donut charts displaying the percentage of positive and negative posts for NATO and Russia, based on entity-oriented sentiment classification.
+- **Emotion Distribution:** Donut charts summarizing the dominant emotional probabilities (e.g., surprise, optimism, joy, sadness) per entity. 
+- **Sentiment Over Time:** Line chart showing the weekly evolution of positive and negative sentiment for both entities.
+- **Engagement Trend:** Weekly total engagement trend, helping identify peaks of audience attention.
+- **Polarity by Entity:** Horizontal bar chart comparing the share of positive vs. negative sentiment per entity.
+
+*Insights:*  
+This view allows analysts to identify major fluctuations in sentiment and emotion over time, detect disinformation or propaganda peaks, and correlate engagement trends with real-world events. It emphasizes differences in tone and emotional composition between NATO- and Russia-oriented content.
+
+### 2. Global Sentiment Map
+The second dashboard visualizes sentiment geographically.
+It combines `geo_country_exploded.csv` with `facts_posts_tableau.csv` via `item_id` to compute weighted averages per country.
+- **Map Visualization:** Choropleth map where color intensity represents the average sentiment score towards the selected entity (NATO or Russia).  
+  Red tones represent negative sentiment, blue/green tones represent positive sentiment.
+- **Parameters:** Dropdown (`pPrincipal`) to toggle between NATO and Russia.  
+- **Filters:** Date range, platform (Telegram/X), and language.
+
+*Insights:*  
+This map highlights regional variations in sentiment and helps locate geographic clusters of support or hostility.  
+It also reflects the effectiveness of language-based geolocation heuristics when explicit coordinates are not available.
+
+### 3. Topics & Related Entities
+The final dashboard focuses on contextual themes and entity co-occurrences.
+It contains:
+- **Top Related Entities:** Two treemaps displaying the most frequent related entities connected to NATO and Russia, derived from `entity_mentions.csv`.  
+  NATO-related entities are shown in blue tones; Russia-related entities in red tones.
+- **Main Topic Chart:** Bar chart of the top-level manual topics (`manual_label_topic`), showing the most discussed thematic clusters.
+- **Top Subtopics:** Bar chart listing the five most frequent subtopics (`manual_label_subtopic`) within selected topics, based on the count of `item_id`.
+
+*Insights:*  
+This view reveals the thematic focus of the discourse, identifies what entities are most often mentioned alongside NATO or Russia (e.g., Ukraine, F-16, Putin), and provides a quick overview of the most active subtopics such as “airspace violations” or “drone warfare.”
+
+
+All views were built with **Tableau Public 2025.2.4**.  
+
 ## Best Practices & Troubleshooting
 - **Large models:** if memory is constrained, switch to a lighter emotion model or reduce the batch size in the entity scorer (`score_entity_mentions`). GPU usage is encourdaged as 27000 rows can cost 12 hours
 - **Sparse graph:** inspect `data/processed/x_edges.csv` to confirm mention/reply extraction in the X export.
